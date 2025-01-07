@@ -1,8 +1,12 @@
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError, Uint128, Addr, to_binary,
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, StdError, Uint128, Addr, to_binary,
     CosmosMsg, WasmMsg,};
 use secret_toolkit::snip20;
 
-use crate::state::{CONFIG, POOL_INFO, };
+use crate::state::{CONFIG, STATE, State, PoolInfo, POOL_INFO, UserInfo, USER_INFO};
+use crate::msg::{SendMsg};
+
+pub const SCALING_FACTOR: Uint128 = Uint128::new(1_000_000);
+
 
 
 
@@ -13,80 +17,70 @@ pub fn add_liquidity(
     amount_erth: Uint128,
     amount_b: Uint128,
     pool: String,
-    _stake: bool,
+    stake: bool,
 ) -> Result<Response, StdError> {
-
+    // Load the configuration data from storage
     let config = CONFIG.load(deps.storage)?;
     let pool_addr = deps.api.addr_validate(&pool)?;
 
-     // Load the existing PoolInfo
-     let mut pool_info = POOL_INFO
-     .get(deps.storage, &pool_addr)
-     .ok_or_else(|| StdError::generic_err("Pool not found"))?;
+    // Retrieve pool information from storage or return an error if not found
+    let mut pool_info = POOL_INFO
+        .get(deps.storage, &pool_addr)
+        .ok_or_else(|| StdError::generic_err("Pool not found"))?;
 
+    // Determine LP shares to mint and adjust token amounts if the pool is not empty
     let (shares, adjusted_amount_erth, adjusted_amount_b) = if pool_info.state.total_shares.is_zero() {
-        // Initial liquidity: use the provided amounts directly and set the total shares to the sum
         let shares = amount_erth + amount_b;
         (shares, amount_erth, amount_b)
     } else {
-        // Subsequent liquidity
         let share_erth = amount_erth * pool_info.state.total_shares / pool_info.state.token_erth_reserve;
         let share_b = amount_b * pool_info.state.total_shares / pool_info.state.token_b_reserve;
         let shares = share_erth.min(share_b);
 
-        // Adjust amounts based on the limiting factor
-        let adjusted_amount_erth = (shares * pool_info.state.token_erth_reserve) / pool_info.state.total_shares;
-        let adjusted_amount_b = (shares * pool_info.state.token_b_reserve) / pool_info.state.total_shares;
+        let adjusted_amount_erth =
+            (shares * pool_info.state.token_erth_reserve) / pool_info.state.total_shares;
+        let adjusted_amount_b =
+            (shares * pool_info.state.token_b_reserve) / pool_info.state.total_shares;
 
         (shares, adjusted_amount_erth, adjusted_amount_b)
     };
 
-    // Calculate the excess amount of the token that exceeds the required ratio
+    // Identify which token and how much of it should be refunded to the sender
     let (excess_token, excess_amount) = if amount_erth > adjusted_amount_erth {
         (config.erth_token_contract.clone(), amount_erth - adjusted_amount_erth)
     } else {
         (pool_info.config.token_b_contract.clone(), amount_b - adjusted_amount_b)
     };
 
+    // Prepare messages to transfer the adjusted token amounts from the user to this contract
     let mut messages = vec![];
-
-    // Create messages for transferring tokens from the user to the contract using allowances
-    let transfer_erth_msg = snip20::HandleMsg::TransferFrom {
-        owner: info.sender.clone().to_string(),
-        recipient: env.contract.address.clone().to_string(),
-        amount: adjusted_amount_erth,
-        padding: None,
-        memo: None,
-    };
-    let transfer_b_msg = snip20::HandleMsg::TransferFrom {
-        owner: info.sender.clone().to_string(),
-        recipient: env.contract.address.clone().to_string(),
-        amount: adjusted_amount_b,
-        padding: None,
-        memo: None,
-    };
-
     messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: config.erth_token_contract.to_string(),
         code_hash: config.erth_token_hash.clone(),
-        msg: to_binary(&transfer_erth_msg)?,
+        msg: to_binary(&snip20::HandleMsg::TransferFrom {
+            owner: info.sender.to_string(),
+            recipient: env.contract.address.to_string(),
+            amount: adjusted_amount_erth,
+            padding: None,
+            memo: None,
+        })?,
         funds: vec![],
     }));
     messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: pool_info.config.token_b_contract.to_string(),
         code_hash: pool_info.config.token_b_hash.clone(),
-        msg: to_binary(&transfer_b_msg)?,
+        msg: to_binary(&snip20::HandleMsg::TransferFrom {
+            owner: info.sender.to_string(),
+            recipient: env.contract.address.to_string(),
+            amount: adjusted_amount_b,
+            padding: None,
+            memo: None,
+        })?,
         funds: vec![],
     }));
 
-    // Refund the excess token if any
+    // If excess tokens exist, create a message to refund them to the user
     if excess_amount > Uint128::from(2u32) {
-        let refund_msg = snip20::HandleMsg::Transfer {
-            recipient: info.sender.clone().to_string(),
-            amount: excess_amount,
-            padding: None,
-            memo: None,
-        };
         messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: excess_token.to_string(),
             code_hash: if excess_token == config.erth_token_contract {
@@ -94,30 +88,64 @@ pub fn add_liquidity(
             } else {
                 pool_info.config.token_b_hash.clone()
             },
-            msg: to_binary(&refund_msg)?,
+            msg: to_binary(&snip20::HandleMsg::Transfer {
+                recipient: info.sender.to_string(),
+                amount: excess_amount,
+                padding: None,
+                memo: None,
+            })?,
             funds: vec![],
         }));
     }
 
-    // Update reserves
+    // Update the pool's token reserves and total shares
     pool_info.state.token_erth_reserve += adjusted_amount_erth;
     pool_info.state.token_b_reserve += adjusted_amount_b;
-
     pool_info.state.total_shares += shares;
 
-    // Mint LP tokens
-    let mint_lp_tokens_msg = snip20::HandleMsg::Mint {
-        recipient: info.sender.clone().to_string(),
-        amount: shares,
-        memo: None,
-        padding: None,
+    // Decide who will receive the minted LP tokens
+    let mint_recipient = if stake {
+        env.contract.address.clone()
+    } else {
+        info.sender.clone()
     };
+
+    // Mint the new LP tokens
     messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: pool_info.config.lp_token_contract.to_string(),
         code_hash: pool_info.config.lp_token_hash.clone(),
-        msg: to_binary(&mint_lp_tokens_msg)?,
+        msg: to_binary(&snip20::HandleMsg::Mint {
+            recipient: mint_recipient.to_string(),
+            amount: shares,
+            memo: None,
+            padding: None,
+        })?,
         funds: vec![],
     }));
+
+    // If staking is requested, update the user's staking information accordingly
+    if stake {
+        let user_info_by_pool = USER_INFO.add_suffix(pool_addr.as_bytes());
+        let mut user_info = user_info_by_pool
+            .get(deps.storage, &info.sender)
+            .unwrap_or_default();
+
+        // Update any outstanding rewards if the user has previously staked
+        if user_info.amount_staked > Uint128::zero() {
+            update_user_rewards(&pool_info, &mut user_info)?;
+        }
+
+        // Increase the user's staked amount by the newly minted shares
+        user_info.amount_staked += shares;
+        pool_info.state.total_staked += shares;
+        user_info.reward_debt =
+            user_info.amount_staked * pool_info.state.reward_per_token_scaled / SCALING_FACTOR;
+
+        // Persist changes in storage
+        user_info_by_pool.insert(deps.storage, &info.sender, &user_info)?;
+    }
+    // Store updated pool information
+    POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
     Ok(Response::new()
         .add_messages(messages)
@@ -125,8 +153,10 @@ pub fn add_liquidity(
         .add_attribute("from", info.sender)
         .add_attribute("shares", shares.to_string())
         .add_attribute("adjusted_amount_erth", adjusted_amount_erth.to_string())
-        .add_attribute("adjusted_amount_b", adjusted_amount_b.to_string()))
+        .add_attribute("adjusted_amount_b", adjusted_amount_b.to_string())
+    )
 }
+
 
 
 
@@ -214,4 +244,377 @@ pub fn unbond_liquidity(
         .add_attribute("erth_token_amount", amount_erth.to_string())
         .add_attribute("token_b_amount", amount_b.to_string())
         .add_attribute("lp_token_amount", lp_token_amount.to_string()))
+}
+
+
+
+
+pub fn deposit_lp_tokens(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    from: Addr,
+    amount: Uint128,
+    pool: String,
+) -> Result<Response, StdError> {
+
+    let pool_addr = deps.api.addr_validate(&pool)?;
+
+    // Load pool info from storage
+    let mut pool_info = POOL_INFO
+        .get(deps.storage, &pool_addr)
+        .ok_or_else(|| StdError::generic_err("Pool info not found"))?;
+
+    if info.sender != pool_info.config.lp_token_contract {
+        return Err(StdError::generic_err("Invalid LP token"));
+    }
+    
+    // Access user info for the specific pool
+    let user_info_by_pool = USER_INFO.add_suffix(&pool_addr.as_bytes());
+    
+    // Retrieve user info or initialize a new one using Default if not found
+    let mut user_info = user_info_by_pool
+        .get(deps.storage, &from)
+        .unwrap_or_else(|| UserInfo::default());
+
+    // First, update the user's rewards based on the current amount_staked
+    if user_info.amount_staked > Uint128::zero() {
+        
+        // Update the user's rewards based on the latest pool state
+        update_user_rewards(&pool_info, &mut user_info)?;     
+    }
+
+    // Now, add the new deposit to the user's staked amount
+    user_info.amount_staked += amount;
+    pool_info.state.total_staked += amount;
+
+    // Update the user's reward debt to the current state of the pool
+    user_info.reward_debt = user_info.amount_staked * pool_info.state.reward_per_token_scaled / SCALING_FACTOR;
+
+    // Save the updated or new user info back to storage
+    user_info_by_pool.insert(deps.storage, &from, &user_info)?;
+    POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "deposit")
+        .add_attribute("deposit_amount", amount))
+}
+
+pub fn withdraw_lp_tokens(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    pool: String,
+    amount: Uint128,
+    unbond: bool,
+) -> StdResult<Response> {
+    // Validate the provided pool address
+    let pool_addr = deps.api.addr_validate(&pool)?;
+
+    // Load relevant contract and pool state
+    let mut state = STATE.load(deps.storage)?;
+    let config = CONFIG.load(deps.storage)?;
+    let mut pool_info = POOL_INFO
+        .get(deps.storage, &pool_addr)
+        .ok_or_else(|| StdError::generic_err("Pool info not found"))?;
+
+    // Retrieve the user's staking information
+    let user_info_by_pool = USER_INFO.add_suffix(&pool_addr.as_bytes());
+    let mut user_info = user_info_by_pool
+        .get(deps.storage, &info.sender)
+        .ok_or_else(|| StdError::generic_err("User info not found"))?;
+
+    // Update the pool rewards based on the most recent data
+    update_pool_rewards(&env, &mut state, &mut pool_info, None)?;
+
+    // Update the user's reward information with the current pool state
+    update_user_rewards(&pool_info, &mut user_info)?;
+
+    // Verify that the user has sufficient staked LP tokens
+    if user_info.amount_staked < amount {
+        return Err(StdError::generic_err("Insufficient staked amount to withdraw"));
+    }
+
+    // Subtract the requested withdrawal amount from the user's staked tokens
+    user_info.amount_staked -= amount;
+    pool_info.state.total_staked -= amount;
+
+    // Prepare messages to transfer pending rewards if any
+    let mut messages = Vec::new();
+    if user_info.pending_rewards > Uint128::zero() {
+        let transfer_rewards_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: config.erth_token_contract.to_string(),
+            code_hash: config.erth_token_hash.clone(),
+            msg: to_binary(&snip20::HandleMsg::Transfer {
+                recipient: info.sender.to_string(),
+                amount: user_info.pending_rewards,
+                padding: None,
+                memo: None,
+            })?,
+            funds: vec![],
+        });
+        messages.push(transfer_rewards_msg);
+        user_info.pending_rewards = Uint128::zero();
+    }
+
+    // Update or remove the user's information in storage
+    if user_info.amount_staked.is_zero() {
+        user_info_by_pool.remove(deps.storage, &info.sender)?;
+    } else {
+        user_info.reward_debt =
+            user_info.amount_staked * pool_info.state.reward_per_token_scaled / SCALING_FACTOR;
+        user_info_by_pool.insert(deps.storage, &info.sender, &user_info)?;
+    }
+
+    // Save the modified pool information and global state
+    POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
+    STATE.save(deps.storage, &state)?;
+
+    // If unbond is true, burn the LP tokens and return underlying assets
+    if unbond {
+        let amount_erth =
+            (amount * pool_info.state.token_erth_reserve) / pool_info.state.total_shares;
+        let amount_b =
+            (amount * pool_info.state.token_b_reserve) / pool_info.state.total_shares;
+
+        pool_info.state.token_erth_reserve -= amount_erth;
+        pool_info.state.token_b_reserve -= amount_b;
+        pool_info.state.total_shares -= amount;
+        POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
+
+        let burn_lp_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: pool_info.config.lp_token_contract.to_string(),
+            code_hash: pool_info.config.lp_token_hash.clone(),
+            msg: to_binary(&snip20::HandleMsg::Burn {
+                amount,
+                memo: None,
+                padding: None,
+            })?,
+            funds: vec![],
+        });
+        messages.push(burn_lp_msg);
+
+        messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: config.erth_token_contract.to_string(),
+            code_hash: config.erth_token_hash.clone(),
+            msg: to_binary(&snip20::HandleMsg::Transfer {
+                recipient: info.sender.to_string(),
+                amount: amount_erth,
+                padding: None,
+                memo: None,
+            })?,
+            funds: vec![],
+        }));
+        messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: pool_info.config.token_b_contract.to_string(),
+            code_hash: pool_info.config.token_b_hash.clone(),
+            msg: to_binary(&snip20::HandleMsg::Transfer {
+                recipient: info.sender.to_string(),
+                amount: amount_b,
+                padding: None,
+                memo: None,
+            })?,
+            funds: vec![],
+        }));
+
+        Ok(Response::new()
+            .add_messages(messages)
+            .add_attribute("action", "withdraw_and_unbond")
+            .add_attribute("withdrawn_lp", amount.to_string())
+            .add_attribute("unbonded_erth", amount_erth.to_string())
+            .add_attribute("unbonded_b", amount_b.to_string()))
+    } else {
+        // Otherwise, simply transfer the LP tokens back to the user
+        let transfer_lp_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: pool_info.config.lp_token_contract.to_string(),
+            code_hash: pool_info.config.lp_token_hash.clone(),
+            msg: to_binary(&snip20::HandleMsg::Transfer {
+                recipient: info.sender.to_string(),
+                amount,
+                padding: None,
+                memo: None,
+            })?,
+            funds: vec![],
+        });
+        messages.push(transfer_lp_msg);
+
+        Ok(Response::new()
+            .add_messages(messages)
+            .add_attribute("action", "withdraw_lp")
+            .add_attribute("withdrawn_lp", amount.to_string()))
+    }
+}
+
+
+
+
+pub fn claim_rewards(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    pools: Vec<String>,
+) -> StdResult<Response> {
+    let mut state = STATE.load(deps.storage)?;
+    let config = CONFIG.load(deps.storage)?;
+    let mut total_rewards = Uint128::zero();
+
+    for pool_addr_str in pools.iter() {
+        let pool_addr = deps.api.addr_validate(pool_addr_str)?;
+
+        let mut pool_info = POOL_INFO
+            .get(deps.storage, &pool_addr)
+            .ok_or_else(|| StdError::generic_err("Pool info not found"))?;
+        let user_info_by_pool = USER_INFO.add_suffix(&pool_addr.as_bytes());
+
+        let mut user_info = user_info_by_pool
+            .get(deps.storage, &info.sender)
+            .ok_or_else(|| StdError::generic_err("User info not found"))?;
+
+        update_pool_rewards(&env, &mut state, &mut pool_info, None)?;
+        update_user_rewards(&pool_info, &mut user_info)?;
+
+        let amount_to_claim = user_info.pending_rewards;
+        total_rewards += amount_to_claim;
+        user_info.pending_rewards = Uint128::zero();
+
+        user_info_by_pool.insert(deps.storage, &info.sender, &user_info)?;
+        POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
+    }
+
+    STATE.save(deps.storage, &state)?;
+
+    let transfer_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+        contract_addr: config.erth_token_contract.to_string(),
+        code_hash: config.erth_token_hash.clone(),
+        msg: to_binary(&snip20::HandleMsg::Transfer {
+            recipient: info.sender.to_string(),
+            amount: total_rewards,
+            padding: None,
+            memo: None,
+        })?,
+        funds: vec![],
+    });
+
+    let allocation_claim_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+        contract_addr: config.allocation_contract.to_string(),
+        code_hash: config.allocation_hash.clone(),
+        msg: to_binary(&SendMsg::ClaimAllocation {
+            allocation_id: 1,
+        })?,
+        funds: vec![],
+    });
+
+    Ok(Response::new()
+        .add_attribute("action", "claim_rewards_and_allocation_multi")
+        .add_attribute("total_claimed", total_rewards.to_string())
+        .add_message(transfer_msg)
+        .add_message(allocation_claim_msg))
+}
+
+
+
+
+
+
+pub fn update_pool_rewards(
+    env: &Env,
+    state: &mut State,
+    pool_info: &mut PoolInfo,
+    volume: Option<Uint128>,
+) -> StdResult<()> {
+    // Convert timestamp to days
+    let current_day = env.block.time.seconds() / 86400;
+
+    let mut day_change = false;
+
+    if current_day > state.last_updated_day {
+        day_change = true;
+
+        // Shift total volumes and rewards arrays
+        state.daily_total_volumes.rotate_right(1);
+        state.daily_total_volumes[0] = Uint128::zero();
+
+        state.daily_total_rewards.rotate_right(1);
+        state.daily_total_rewards[0] = state.pending_reward;
+        state.pending_reward = Uint128::zero();
+
+        // Update last updated day
+        state.last_updated_day = current_day;
+    }
+
+    // Check if we need to update the pool's day
+    if current_day > pool_info.state.last_updated_day {
+        day_change = true;
+
+        // Shift daily rewards for the pool
+        pool_info.state.daily_rewards.rotate_right(1);
+        pool_info.state.daily_rewards[0] = Uint128::zero(); // Reset today's reward
+
+        // Shift daily volumes for the pool
+        pool_info.state.daily_volumes.rotate_right(1);
+        pool_info.state.daily_volumes[0] = Uint128::zero(); // Reset today's volume
+
+        // Update the pool's last updated day
+        pool_info.state.last_updated_day = current_day;
+    }
+
+    // If there is a provided volume, add it to today's volume
+    if let Some(vol) = volume {
+        pool_info.state.daily_volumes[0] += vol;
+        state.daily_total_volumes[0] += vol;
+    }
+
+    // Only recalculate rewards if a day change occurred
+    if day_change {
+        // Sum last 7 days of pool volume (excluding today)
+        let last_7_days_pool_volume: Uint128 = pool_info.state.daily_volumes[1..8].iter().sum();
+        if last_7_days_pool_volume.is_zero() {
+            return Ok(()); // No volume in the past 7 days, skip
+        }
+
+        // Sum last 7 days of total volume (excluding today)
+        let last_7_days_total_volume: Uint128 = state.daily_total_volumes[1..8].iter().sum();
+        if last_7_days_total_volume.is_zero() {
+            return Ok(()); // No total volume in the past 7 days, skip
+        }
+
+        // Calculate pool's share of today's rewards
+        let pool_reward_share = (last_7_days_pool_volume * state.daily_total_rewards[0])
+            / last_7_days_total_volume;
+
+        // Add calculated rewards to today's pool rewards
+        pool_info.state.daily_rewards[0] += pool_reward_share;
+
+        // Update reward per token if the pool has staked liquidity
+        if !pool_info.state.total_staked.is_zero() {
+            let reward_per_token = (pool_reward_share * SCALING_FACTOR)
+                / pool_info.state.total_staked;
+            pool_info.state.reward_per_token_scaled += reward_per_token;
+        }
+    }
+
+    Ok(())
+}
+
+
+
+
+
+
+
+pub fn update_user_rewards(
+    pool_info: &PoolInfo,
+    user_info: &mut UserInfo,
+) -> StdResult<()> {
+
+    // Calculate the pending rewards for the user
+    let pending_reward = (user_info.amount_staked * pool_info.state.reward_per_token_scaled) / SCALING_FACTOR - user_info.reward_debt;
+
+    // Update the user's pending rewards
+    user_info.pending_rewards += pending_reward;
+
+    // Update the user's reward debt to the current state of the pool
+    user_info.reward_debt = (user_info.amount_staked * pool_info.state.reward_per_token_scaled) / SCALING_FACTOR;
+
+    Ok(())
 }

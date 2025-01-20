@@ -29,7 +29,8 @@ pub fn perform_instantiate(
         lp_token_code_id: msg.lp_token_code_id,
         lp_token_hash: msg.lp_token_hash,
         unbonding_seconds: msg.unbonding_seconds,
-        protocol_fee: Uint128::from(50u32),
+        maker_fee: Uint128::from(50u32),
+        taker_fee: Uint128::from(50u32),
     };
 
     let state = State {

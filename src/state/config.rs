@@ -16,7 +16,8 @@ pub struct Config {
     pub lp_token_code_id: u64,
     pub lp_token_hash: String,
     pub unbonding_seconds: u64,
-    pub protocol_fee: Uint128,
+    pub maker_fee: Uint128,
+    pub taker_fee: Uint128,
 }
 
 pub static CONFIG: Item<Config> = Item::new(b"config");

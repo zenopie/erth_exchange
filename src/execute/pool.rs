@@ -39,7 +39,7 @@ pub fn add_pool(
         daily_volumes: [Uint128::zero(); 8],
         daily_rewards: [Uint128::zero(); 8],
         last_updated_day: 0,
-        token_erth_reserve: Uint128::zero(),
+        erth_reserve: Uint128::zero(),
         token_b_reserve: Uint128::zero(),
     };
 

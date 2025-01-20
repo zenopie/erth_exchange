@@ -12,7 +12,7 @@ pub struct PoolState {
     pub daily_volumes: [Uint128; 8],
     pub daily_rewards: [Uint128; 8],
     pub last_updated_day: u64,
-    pub token_erth_reserve: Uint128,
+    pub erth_reserve: Uint128,
     pub token_b_reserve: Uint128,
 }
 
@@ -44,3 +44,13 @@ pub struct UserInfo {
 pub static USER_INFO: Keymap<Addr, UserInfo> = Keymap::new(b"user_info");
 
 pub static PENDING_POOL: Item<Addr> = Item::new(b"pending_pool");
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct Order {
+    pub user: Option<Addr>,
+    pub input_remaining: Uint128,
+}
+
+pub static BUY_ORDERS: Keymap<Uint128, Vec<Order>> = Keymap::new(b"buy_orders");
+
+pub static SELL_ORDERS: Keymap<Uint128, Vec<Order>> = Keymap::new(b"sell_orders");

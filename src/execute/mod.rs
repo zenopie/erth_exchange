@@ -13,6 +13,8 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, StdError, Uin
 use crate::msg::{ExecuteMsg, ReceiveMsg};
 use crate::state::{STATE, CONFIG};
 
+pub const SCALING_FACTOR: Uint128 = Uint128::new(1_000_000);
+
 pub fn execute_dispatch(
     deps: DepsMut, 
     env: Env, 
@@ -51,7 +53,7 @@ pub fn recieve_dispatch(
         ReceiveMsg::DepositLpTokens {pool} => liquidity::deposit_lp_tokens(deps, env, info, from_addr, amount, pool),
         ReceiveMsg::UnbondLiquidity {pool} => liquidity::unbond_liquidity(deps, env, info, from_addr, amount, pool),
         ReceiveMsg::Swap {output_token, ..} => swap::swap(deps, env, info, from_addr, amount, output_token,),
-        ReceiveMsg::AnmlBuybackSwap {} => swap::anml_buyback_swap(deps, env, info, amount),
+        ReceiveMsg::AnmlBuybackSwap {} => swap::anml_buyback(deps, env, info, amount),
         ReceiveMsg::AllocationSend { allocation_id } => recieve_allocation(deps, env, info, amount, allocation_id),
     }
 }

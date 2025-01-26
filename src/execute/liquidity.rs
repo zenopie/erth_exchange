@@ -4,6 +4,7 @@ use secret_toolkit::snip20;
 
 use crate::state::{CONFIG, STATE, State, PoolInfo, POOL_INFO, UserInfo, USER_INFO};
 use crate::msg::{SendMsg};
+use crate::execute::SCALING_FACTOR;
 
 
 

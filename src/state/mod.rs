@@ -15,10 +15,8 @@ use secret_toolkit_storage::{Item};
 pub struct State {
     pub erth_burned: Uint128,
     pub anml_burned: Uint128,
-    pub daily_total_volumes: [Uint128; 8],
-    pub daily_total_rewards: [Uint128; 8],
+    pub pending_volume: Uint128,
     pub pending_reward: Uint128,
-    pub last_updated_day: u64,
 }
 
 pub static STATE: Item<State> = Item::new(b"state");

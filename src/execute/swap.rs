@@ -1,13 +1,12 @@
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError, Uint128, Addr, to_binary,
+use cosmwasm_std::{DepsMut, MessageInfo, Response, StdError, Uint128, Addr, to_binary,
     CosmosMsg, WasmMsg};
 use secret_toolkit::snip20;
 
 use crate::state::{Config, CONFIG, STATE, PoolInfo, POOL_INFO};
-use crate::execute::update_pool_rewards;
+use crate::execute::SCALING_FACTOR;
 
 pub fn swap(
     deps: DepsMut,
-    env: Env,
     info: MessageInfo,
     from: Addr,
     amount: Uint128,
@@ -29,7 +28,8 @@ pub fn swap(
         let (fee_step1, intermediate_amount, vol_step1) =
             calculate_swap(&config, &mut input_pool_info, amount, &info.sender)?;
 
-        update_pool_rewards(&env, &mut state, &mut input_pool_info, Some(vol_step1))?;
+        
+        input_pool_info.state.pending_volume += vol_step1;
         POOL_INFO.insert(deps.storage, &info.sender, &input_pool_info)?;
 
         // 2) Swap ERTH -> output_token
@@ -40,11 +40,13 @@ pub fn swap(
         let (fee_step2, final_output_amount, vol_step2) =
             calculate_swap(&config, &mut output_pool_info, intermediate_amount, &config.erth_token_contract.clone())?;
 
-        update_pool_rewards(&env, &mut state, &mut output_pool_info, Some(vol_step2))?;
+        output_pool_info.state.pending_volume += vol_step2;
         POOL_INFO.insert(deps.storage, &output_token_addr, &output_pool_info)?;
         
         let total_fee = fee_step1 + fee_step2;
         state.erth_burned += total_fee;
+        let total_vol = vol_step1 + vol_step2;
+        state.pending_volume += total_vol;
         STATE.save(deps.storage, &state)?;
 
         // Construct transfer message for final output
@@ -98,10 +100,11 @@ pub fn swap(
         let (protocol_fee, output_amount, trade_volume) =
             calculate_swap(&config, &mut pool_info, amount, &info.sender)?;
 
-        update_pool_rewards(&env, &mut state, &mut pool_info, Some(trade_volume))?;
+        pool_info.state.pending_volume += trade_volume;
         POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
         state.erth_burned += protocol_fee;
+        state.pending_volume += trade_volume;
         STATE.save(deps.storage, &state)?;
 
         // Transfer the output tokens to the user
@@ -214,7 +217,6 @@ pub fn calculate_swap(
 
 pub fn anml_buyback_swap(
     deps: DepsMut,
-    env: Env,
     info: MessageInfo,
     amount: Uint128,
 ) -> Result<Response, StdError> {
@@ -227,25 +229,70 @@ pub fn anml_buyback_swap(
         return Err(StdError::generic_err("invalid input token"));
     }
 
-    let mut pool_info = POOL_INFO
+    let mut anml_pool_info = POOL_INFO
             .get(deps.storage, &config.anml_token_contract)
             .ok_or_else(|| StdError::generic_err("ANML pool not found"))?;
 
 
     // Calculate the swap details without fees
-    let output_amount = calculate_feeless_swap(&config, &pool_info, amount, &input_token)?;
+    let output_amount = calculate_feeless_swap(&config, &anml_pool_info, amount, &input_token)?;
 
     // Update reserves
-    pool_info.state.erth_reserve += amount;
-    pool_info.state.token_b_reserve -= output_amount;
-
-    // Update the pool's rewards
-    update_pool_rewards(&env, &mut state, &mut pool_info, Some(amount))?;
-    POOL_INFO.insert(deps.storage, &config.anml_token_contract, &pool_info)?;
+    anml_pool_info.state.erth_reserve += amount;
+    anml_pool_info.state.token_b_reserve -= output_amount;
+    anml_pool_info.state.pending_volume += amount;
+    POOL_INFO.insert(deps.storage, &config.anml_token_contract, &anml_pool_info)?;
 
     // Save pool info
     state.anml_burned += output_amount;
+    
+
+    
+    //start of pool rewards upkeep -move to cron once avail
+    
+    let mut pools = Vec::new();
+    // 1) Get the iterator
+    let mut iter = POOL_INFO.iter(deps.storage)?;
+
+    while let Some(item_result) = iter.next() {
+        let (addr, pool_info) = item_result?; // This is `(Addr, PoolInfo)`
+        pools.push((addr, pool_info));        // Push the actual tuple
+    }
+
+    // Roll pending_reward into today's new daily_reward_pool
+    let reward_pool = state.pending_reward;
+    state.pending_reward = Uint128::zero();
+
+    // Distribute yesterday's daily_reward_pool if there was any volume
+    if !state.pending_volume.is_zero() {
+        for (addr, ref mut pool_info) in pools.iter_mut() {
+            if !pool_info.state.pending_volume.is_zero() {
+                // Pool's share = (pool_volume / total_volume) * reward_pool
+                let pool_share = pool_info.state.pending_volume.multiply_ratio(
+                    reward_pool,
+                    state.pending_volume
+                );
+                // Update reward_per_token_scaled if staked
+                if !pool_info.state.total_staked.is_zero() {
+                    let increment = pool_share
+                        .saturating_mul(SCALING_FACTOR)
+                        .checked_div(pool_info.state.total_staked)
+                        .unwrap_or(Uint128::zero());
+                        pool_info.state.reward_per_token_scaled += increment;
+                }
+            }
+            // Reset each pool’s daily volume for the new day
+            pool_info.state.pending_volume = Uint128::zero();
+            POOL_INFO.insert(deps.storage, &addr, &pool_info)?;
+        }
+    }
+
+    // Reset global daily volume
+    state.pending_volume = Uint128::zero();
+
     STATE.save(deps.storage, &state)?;
+
+    //end of upkeep
 
     // Burn message
     // If the received token is ERTH, burn it
@@ -269,6 +316,7 @@ pub fn anml_buyback_swap(
         .add_attribute("input_amount", amount.to_string())
         .add_attribute("output_amount", output_amount.to_string()))
 }
+
 
 fn calculate_feeless_swap(
     config: &Config,

@@ -35,10 +35,8 @@ pub fn perform_instantiate(
     let state = State {
         erth_burned: Uint128::zero(),
         anml_burned: Uint128::zero(),
-        daily_total_volumes: [Uint128::zero(); 8],
-        daily_total_rewards: [Uint128::zero(); 8],
+        pending_volume: Uint128::zero(),
         pending_reward: Uint128::zero(),
-        last_updated_day: 0,
     };
 
     CONFIG.save(deps.storage, &config)?;

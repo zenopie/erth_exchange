@@ -2,7 +2,7 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, StdError, Uin
     CosmosMsg, WasmMsg,};
 use secret_toolkit::snip20;
 
-use crate::state::{CONFIG, STATE, State, PoolInfo, POOL_INFO, UserInfo, USER_INFO};
+use crate::state::{CONFIG, STATE, PoolInfo, POOL_INFO, UserInfo, USER_INFO};
 use crate::msg::{SendMsg};
 use crate::execute::SCALING_FACTOR;
 
@@ -303,7 +303,6 @@ pub fn deposit_lp_tokens(
 
 pub fn withdraw_lp_tokens(
     deps: DepsMut,
-    env: Env,
     info: MessageInfo,
     pool: String,
     amount: Uint128,
@@ -313,7 +312,7 @@ pub fn withdraw_lp_tokens(
     let pool_addr = deps.api.addr_validate(&pool)?;
 
     // Load relevant contract and pool state
-    let mut state = STATE.load(deps.storage)?;
+    let state = STATE.load(deps.storage)?;
     let config = CONFIG.load(deps.storage)?;
     let mut pool_info = POOL_INFO
         .get(deps.storage, &pool_addr)
@@ -325,8 +324,6 @@ pub fn withdraw_lp_tokens(
         .get(deps.storage, &info.sender)
         .ok_or_else(|| StdError::generic_err("User info not found"))?;
 
-    // Update the pool rewards based on the most recent data
-    update_pool_rewards(&env, &mut state, &mut pool_info, None)?;
 
     // Update the user's reward information with the current pool state
     update_user_rewards(&pool_info, &mut user_info)?;
@@ -446,23 +443,19 @@ pub fn withdraw_lp_tokens(
     }
 }
 
-
-
-
 pub fn claim_rewards(
     deps: DepsMut,
-    env: Env,
     info: MessageInfo,
     pools: Vec<String>,
 ) -> StdResult<Response> {
-    let mut state = STATE.load(deps.storage)?;
+    let state = STATE.load(deps.storage)?;
     let config = CONFIG.load(deps.storage)?;
     let mut total_rewards = Uint128::zero();
 
     for pool_addr_str in pools.iter() {
         let pool_addr = deps.api.addr_validate(pool_addr_str)?;
 
-        let mut pool_info = POOL_INFO
+        let pool_info = POOL_INFO
             .get(deps.storage, &pool_addr)
             .ok_or_else(|| StdError::generic_err("Pool info not found"))?;
         let user_info_by_pool = USER_INFO.add_suffix(&pool_addr.as_bytes());
@@ -471,7 +464,6 @@ pub fn claim_rewards(
             .get(deps.storage, &info.sender)
             .ok_or_else(|| StdError::generic_err("User info not found"))?;
 
-        update_pool_rewards(&env, &mut state, &mut pool_info, None)?;
         update_user_rewards(&pool_info, &mut user_info)?;
 
         let amount_to_claim = user_info.pending_rewards;
@@ -517,89 +509,6 @@ pub fn claim_rewards(
 
 
 
-pub fn update_pool_rewards(
-    env: &Env,
-    state: &mut State,
-    pool_info: &mut PoolInfo,
-    volume: Option<Uint128>,
-) -> StdResult<()> {
-    // Convert timestamp to days
-    let current_day = env.block.time.seconds() / 86400;
-
-    let mut day_change = false;
-
-    if current_day > state.last_updated_day {
-        day_change = true;
-
-        // Shift total volumes and rewards arrays
-        state.daily_total_volumes.rotate_right(1);
-        state.daily_total_volumes[0] = Uint128::zero();
-
-        state.daily_total_rewards.rotate_right(1);
-        state.daily_total_rewards[0] = state.pending_reward;
-        state.pending_reward = Uint128::zero();
-
-        // Update last updated day
-        state.last_updated_day = current_day;
-    }
-
-    // Check if we need to update the pool's day
-    if current_day > pool_info.state.last_updated_day {
-        day_change = true;
-
-        // Shift daily rewards for the pool
-        pool_info.state.daily_rewards.rotate_right(1);
-        pool_info.state.daily_rewards[0] = Uint128::zero(); // Reset today's reward
-
-        // Shift daily volumes for the pool
-        pool_info.state.daily_volumes.rotate_right(1);
-        pool_info.state.daily_volumes[0] = Uint128::zero(); // Reset today's volume
-
-        // Update the pool's last updated day
-        pool_info.state.last_updated_day = current_day;
-    }
-
-    // If there is a provided volume, add it to today's volume
-    if let Some(vol) = volume {
-        pool_info.state.daily_volumes[0] += vol;
-        state.daily_total_volumes[0] += vol;
-    }
-
-    // Only recalculate rewards if a day change occurred
-    if day_change {
-        // Sum last 7 days of pool volume (excluding today)
-        let last_7_days_pool_volume: Uint128 = pool_info.state.daily_volumes[1..8].iter().sum();
-        if last_7_days_pool_volume.is_zero() {
-            return Ok(()); // No volume in the past 7 days, skip
-        }
-
-        // Sum last 7 days of total volume (excluding today)
-        let last_7_days_total_volume: Uint128 = state.daily_total_volumes[1..8].iter().sum();
-        if last_7_days_total_volume.is_zero() {
-            return Ok(()); // No total volume in the past 7 days, skip
-        }
-
-        // Calculate pool's share of today's rewards
-        let pool_reward_share = (last_7_days_pool_volume * state.daily_total_rewards[0])
-            / last_7_days_total_volume;
-
-        // Add calculated rewards to today's pool rewards
-        pool_info.state.daily_rewards[0] += pool_reward_share;
-
-        // Update reward per token if the pool has staked liquidity
-        if !pool_info.state.total_staked.is_zero() {
-            let reward_per_token = (pool_reward_share * SCALING_FACTOR)
-                / pool_info.state.total_staked;
-            pool_info.state.reward_per_token_scaled += reward_per_token;
-        }
-    }
-
-    Ok(())
-}
-
-
-
-
 
 
 
@@ -619,3 +528,5 @@ pub fn update_user_rewards(
 
     Ok(())
 }
+
+

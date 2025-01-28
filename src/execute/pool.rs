@@ -36,9 +36,7 @@ pub fn add_pool(
         total_shares: Uint128::zero(),
         total_staked: Uint128::zero(),
         reward_per_token_scaled: Uint128::zero(),
-        daily_volumes: [Uint128::zero(); 8],
-        daily_rewards: [Uint128::zero(); 8],
-        last_updated_day: 0,
+        pending_volume: Uint128::zero(),
         erth_reserve: Uint128::zero(),
         token_b_reserve: Uint128::zero(),
     };

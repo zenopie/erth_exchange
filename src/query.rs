@@ -3,15 +3,15 @@ use cosmwasm_std::{Deps, Env, Binary, StdResult, to_binary, Uint128 };
 use crate::msg::{QueryMsg, UserInfoResponse};
 use crate::state::{STATE, State, Config, CONFIG, UserInfo, USER_INFO, POOL_INFO, PoolInfo,
     };
-use crate::execute::{update_user_rewards, update_pool_rewards};
+use crate::execute::{update_user_rewards};
 
 
-pub fn query_dispatch(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query_dispatch(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::QueryState {} => to_binary(&query_state(deps)?),
         QueryMsg::QueryConfig {} => to_binary(&query_config(deps)?),
         QueryMsg::QueryPoolInfo {pools} => to_binary(&query_pool_info(deps, pools)?),
-        QueryMsg::QueryUserInfo {pools, user} => to_binary(&query_user_info(deps, env, pools, user)?),
+        QueryMsg::QueryUserInfo {pools, user} => to_binary(&query_user_info(deps, pools, user)?),
     }
 }
 
@@ -52,21 +52,17 @@ fn query_pool_info(
 
 fn query_user_info(
     deps: Deps,
-    env: Env,
     pools: Vec<String>,
     user: String,
 ) -> StdResult<Vec<UserInfoResponse>> {
     let user_addr = deps.api.addr_validate(&user)?;
-
-    // Load state but don't save changes
-    let mut state = STATE.load(deps.storage)?;
 
     let mut results = vec![];
 
     for pool_str in pools {
         let pool_addr = deps.api.addr_validate(&pool_str)?;
 
-        let mut pool_info = match POOL_INFO.get(deps.storage, &pool_addr) {
+        let pool_info = match POOL_INFO.get(deps.storage, &pool_addr) {
             Some(info) => info,
             None => {
                 // If pool not found, skip or return an empty result for this pool.
@@ -87,7 +83,6 @@ fn query_user_info(
 
         // Only update rewards if user has any stake or pending rewards to begin with
         if user_info.amount_staked > Uint128::zero() || user_info.pending_rewards > Uint128::zero() {
-            update_pool_rewards(&env, &mut state, &mut pool_info, None)?;
             update_user_rewards(&pool_info, &mut user_info)?;
         }
 

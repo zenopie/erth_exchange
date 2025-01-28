@@ -9,9 +9,7 @@ pub struct PoolState {
     pub total_shares: Uint128,
     pub total_staked: Uint128,
     pub reward_per_token_scaled: Uint128,
-    pub daily_volumes: [Uint128; 8],
-    pub daily_rewards: [Uint128; 8],
-    pub last_updated_day: u64,
+    pub pending_volume: Uint128,
     pub erth_reserve: Uint128,
     pub token_b_reserve: Uint128,
 }

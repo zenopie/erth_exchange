@@ -53,7 +53,7 @@ pub fn recieve_dispatch(
         ReceiveMsg::DepositLpTokens {pool} => liquidity::deposit_lp_tokens(deps, env, info, from_addr, amount, pool),
         ReceiveMsg::UnbondLiquidity {pool} => liquidity::unbond_liquidity(deps, env, info, from_addr, amount, pool),
         ReceiveMsg::Swap {output_token, ..} => swap::swap(deps, info, from_addr, amount, output_token,),
-        ReceiveMsg::AnmlBuybackSwap {} => swap::anml_buyback_swap(deps, info, amount),
+        ReceiveMsg::AnmlBuybackSwap {} => swap::anml_buyback_swap(deps, env, info, amount),
         ReceiveMsg::AllocationSend { allocation_id } => recieve_allocation(deps, env, info, amount, allocation_id),
     }
 }

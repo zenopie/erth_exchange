@@ -39,6 +39,8 @@ pub fn add_pool(
         pending_volume: Uint128::zero(),
         erth_reserve: Uint128::zero(),
         token_b_reserve: Uint128::zero(),
+        daily_rewards: [Uint128::zero(); 7],
+        last_updated_day: 0,
     };
 
     let pool_config = PoolConfig {

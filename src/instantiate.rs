@@ -35,7 +35,6 @@ pub fn perform_instantiate(
     let state = State {
         erth_burned: Uint128::zero(),
         anml_burned: Uint128::zero(),
-        pending_volume: Uint128::zero(),
         pending_reward: Uint128::zero(),
     };
 

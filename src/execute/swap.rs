@@ -1,4 +1,4 @@
-use cosmwasm_std::{DepsMut, MessageInfo, Response, StdError, Uint128, Addr, to_binary,
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError, Uint128, Addr, to_binary,
     CosmosMsg, WasmMsg};
 use secret_toolkit::snip20;
 
@@ -45,8 +45,6 @@ pub fn swap(
         
         let total_fee = fee_step1 + fee_step2;
         state.erth_burned += total_fee;
-        let total_vol = vol_step1 + vol_step2;
-        state.pending_volume += total_vol;
         STATE.save(deps.storage, &state)?;
 
         // Construct transfer message for final output
@@ -104,7 +102,6 @@ pub fn swap(
         POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
         state.erth_burned += protocol_fee;
-        state.pending_volume += trade_volume;
         STATE.save(deps.storage, &state)?;
 
         // Transfer the output tokens to the user
@@ -217,6 +214,7 @@ pub fn calculate_swap(
 
 pub fn anml_buyback_swap(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
     amount: Uint128,
 ) -> Result<Response, StdError> {
@@ -247,55 +245,81 @@ pub fn anml_buyback_swap(
     state.anml_burned += output_amount;
     
 
-    
-    //start of pool rewards upkeep
-    
-    let mut pools = Vec::new();
-    // 1) Get the iterator
-    let mut iter = POOL_INFO.iter(deps.storage)?;
+    // Start of pool rewards upkeep
+    if !state.pending_reward.is_zero() {
+        let mut pools = Vec::new();
+        let mut total_volume = Uint128::zero();
 
-    while let Some(item_result) = iter.next() {
-        let (addr, pool_info) = item_result?; // This is `(Addr, PoolInfo)`
-        pools.push((addr, pool_info));        // Push the actual tuple
-    }
+        // Identify today's day index
+        let current_day = env.block.time.seconds() / 86400;
 
-    // Roll pending_reward into today's new daily_reward_pool
-    let reward_pool = state.pending_reward;
-    state.pending_reward = Uint128::zero();
+        // 1) Collect all pools from storage
+        let mut iter = POOL_INFO.iter(deps.storage)?;
+        while let Some(item_result) = iter.next() {
+            let (addr, pool_info) = item_result?;
+            total_volume += pool_info.state.pending_volume;
+            pools.push((addr, pool_info));
+        }
 
-    // Distribute yesterday's daily_reward_pool if there was any volume
-    if !state.pending_volume.is_zero() {
-        for (addr, ref mut pool_info) in pools.iter_mut() {
-            if !pool_info.state.pending_volume.is_zero() {
-                // Pool's share = (pool_volume / total_volume) * reward_pool
-                let pool_share = pool_info.state.pending_volume.multiply_ratio(
-                    reward_pool,
-                    state.pending_volume
-                );
-                // Update reward_per_token_scaled if staked
-                if !pool_info.state.total_staked.is_zero() {
-                    let increment = pool_share
-                        .saturating_mul(SCALING_FACTOR)
-                        .checked_div(pool_info.state.total_staked)
-                        .unwrap_or(Uint128::zero());
-                        pool_info.state.reward_per_token_scaled += increment;
+        // 2) Use `state.pending_reward` as the reward pool
+        let reward_pool = state.pending_reward;
+
+        // 3) Distribute only if there's total volume
+        if !total_volume.is_zero() {
+            for (addr, ref mut pool_info) in pools.iter_mut() {
+                // Rotate daily_rewards if day changed --
+                let days_passed = current_day.saturating_sub(pool_info.state.last_updated_day);
+                if days_passed > 0 {
+                    if days_passed >= 7 {
+                        // If 7+ days passed, just reset array
+                        pool_info.state.daily_rewards = [Uint128::zero(); 7];
+                    } else {
+                        for _ in 0..days_passed {
+                            pool_info.state.daily_rewards.rotate_right(1);
+                            // The new "today" slot is index 0
+                            pool_info.state.daily_rewards[0] = Uint128::zero();
+                        }
+                    }
+                    // Update last_updated_day
+                    pool_info.state.last_updated_day = current_day;
                 }
+
+                // Distribute today's share if pool has volume --
+                if !pool_info.state.pending_volume.is_zero() {
+                    let pool_share = pool_info
+                        .state
+                        .pending_volume
+                        .multiply_ratio(reward_pool, total_volume);
+
+                    // If staked, update reward_per_token
+                    if !pool_info.state.total_staked.is_zero() {
+                        let increment = pool_share
+                            .saturating_mul(SCALING_FACTOR)
+                            .checked_div(pool_info.state.total_staked)
+                            .unwrap_or(Uint128::zero());
+                        pool_info.state.reward_per_token_scaled += increment;
+                    }
+
+                    // Add pool_share to today's slot of daily_rewards (index 0)
+                    pool_info.state.daily_rewards[0] += pool_share;
+                }
+
+                // Reset this pool’s pending volume for the new day
+                pool_info.state.pending_volume = Uint128::zero();
+
+                // Finally, save updates
+                POOL_INFO.insert(deps.storage, &addr, &pool_info)?;
             }
-            // Reset each pool’s daily volume for the new day
-            pool_info.state.pending_volume = Uint128::zero();
-            POOL_INFO.insert(deps.storage, &addr, &pool_info)?;
+
+            // Clear out pending_reward once we've distributed
+            state.pending_reward = Uint128::zero();
         }
     }
 
-    // Reset global daily volume
-    state.pending_volume = Uint128::zero();
-
+    // Save state whether or not we distributed
     STATE.save(deps.storage, &state)?;
 
-    //end of upkeep
-
     // Burn message
-    // If the received token is ERTH, burn it
     let burn_msg = snip20::HandleMsg::Burn { 
         amount,
         memo: None,

@@ -15,7 +15,6 @@ use secret_toolkit_storage::{Item};
 pub struct State {
     pub erth_burned: Uint128,
     pub anml_burned: Uint128,
-    pub pending_volume: Uint128,
     pub pending_reward: Uint128,
 }
 

@@ -248,7 +248,7 @@ pub fn anml_buyback_swap(
     
 
     
-    //start of pool rewards upkeep -move to cron once avail
+    //start of pool rewards upkeep
     
     let mut pools = Vec::new();
     // 1) Get the iterator

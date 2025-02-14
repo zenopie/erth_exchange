@@ -4,7 +4,9 @@ pub mod config;
 pub mod pool;
 
 pub use config::{Config, CONFIG,};
-pub use pool::{PoolInfo, POOL_INFO, UserInfo, USER_INFO, PoolConfig, PENDING_POOL, PoolState};
+pub use pool::{PoolInfo, POOL_INFO, UserInfo, USER_INFO, PoolConfig, PENDING_POOL, PoolState,
+    UNBONDING_REQUESTS, UnbondRecord,
+};
 
 use cosmwasm_std::{Uint128};
 use schemars::JsonSchema;

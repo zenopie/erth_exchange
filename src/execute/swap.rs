@@ -3,7 +3,7 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError, Uint128, Addr,
 use secret_toolkit::snip20;
 
 use crate::state::{Config, CONFIG, STATE, PoolInfo, POOL_INFO};
-use crate::execute::SCALING_FACTOR;
+use crate::execute::{pool_rewards_upkeep};
 
 pub fn swap(
     deps: DepsMut,
@@ -212,13 +212,14 @@ pub fn calculate_swap(
 
 
 
+
+
 pub fn anml_buyback_swap(
-    deps: DepsMut,
+    mut deps: DepsMut,
     env: Env,
     info: MessageInfo,
     amount: Uint128,
 ) -> Result<Response, StdError> {
-
     let mut state = STATE.load(deps.storage)?;
     let config = CONFIG.load(deps.storage)?;
     let input_token = info.sender.clone();
@@ -228,111 +229,39 @@ pub fn anml_buyback_swap(
     }
 
     let mut anml_pool_info = POOL_INFO
-            .get(deps.storage, &config.anml_token_contract)
-            .ok_or_else(|| StdError::generic_err("ANML pool not found"))?;
+        .get(deps.storage, &config.anml_token_contract)
+        .ok_or_else(|| StdError::generic_err("ANML pool not found"))?;
 
-
-    // Calculate the swap details without fees
+    // Calculate swap details (no fees)
     let output_amount = calculate_feeless_swap(&config, &anml_pool_info, amount, &input_token)?;
 
-    // Update reserves
+    // Update pool reserves
     anml_pool_info.state.erth_reserve += amount;
     anml_pool_info.state.token_b_reserve -= output_amount;
     anml_pool_info.state.pending_volume += amount;
     POOL_INFO.insert(deps.storage, &config.anml_token_contract, &anml_pool_info)?;
 
-    // Save pool info
+    // Track total ANML burned
     state.anml_burned += output_amount;
-    
 
-    // Start of pool rewards upkeep
-    if !state.pending_reward.is_zero() {
-        let mut pools = Vec::new();
-        let mut total_volume = Uint128::zero();
+    // Distribute any pending rewards
+    pool_rewards_upkeep(deps.branch(), env.clone(), &mut state)?;
 
-        // Identify today's day index
-        let current_day = env.block.time.seconds() / 86400;
-
-        // 1) Collect all pools from storage
-        let mut iter = POOL_INFO.iter(deps.storage)?;
-        while let Some(item_result) = iter.next() {
-            let (addr, pool_info) = item_result?;
-            total_volume += pool_info.state.pending_volume;
-            pools.push((addr, pool_info));
-        }
-
-        // 2) Use `state.pending_reward` as the reward pool
-        let reward_pool = state.pending_reward;
-
-        // 3) Distribute only if there's total volume
-        if !total_volume.is_zero() {
-            for (addr, ref mut pool_info) in pools.iter_mut() {
-                // Rotate daily_rewards if day changed --
-                let days_passed = current_day.saturating_sub(pool_info.state.last_updated_day);
-                if days_passed > 0 {
-                    if days_passed >= 7 {
-                        // If 7+ days passed, just reset array
-                        pool_info.state.daily_rewards = [Uint128::zero(); 7];
-                    } else {
-                        for _ in 0..days_passed {
-                            pool_info.state.daily_rewards.rotate_right(1);
-                            // The new "today" slot is index 0
-                            pool_info.state.daily_rewards[0] = Uint128::zero();
-                        }
-                    }
-                    // Update last_updated_day
-                    pool_info.state.last_updated_day = current_day;
-                }
-
-                // Distribute today's share if pool has volume --
-                if !pool_info.state.pending_volume.is_zero() {
-                    let pool_share = pool_info
-                        .state
-                        .pending_volume
-                        .multiply_ratio(reward_pool, total_volume);
-
-                    // If staked, update reward_per_token
-                    if !pool_info.state.total_staked.is_zero() {
-                        let increment = pool_share
-                            .saturating_mul(SCALING_FACTOR)
-                            .checked_div(pool_info.state.total_staked)
-                            .unwrap_or(Uint128::zero());
-                        pool_info.state.reward_per_token_scaled += increment;
-                    }
-
-                    // Add pool_share to today's slot of daily_rewards (index 0)
-                    pool_info.state.daily_rewards[0] += pool_share;
-                }
-
-                // Reset this pool’s pending volume for the new day
-                pool_info.state.pending_volume = Uint128::zero();
-
-                // Finally, save updates
-                POOL_INFO.insert(deps.storage, &addr, &pool_info)?;
-            }
-
-            // Clear out pending_reward once we've distributed
-            state.pending_reward = Uint128::zero();
-        }
-    }
-
-    // Save state whether or not we distributed
+    // Save updated state
     STATE.save(deps.storage, &state)?;
 
     // Burn message
-    let burn_msg = snip20::HandleMsg::Burn { 
-        amount,
+    let burn_msg = snip20::HandleMsg::Burn {
+        amount: output_amount,
         memo: None,
         padding: None,
     };
-
     let burn_wasm_msg = CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: config.anml_token_contract.to_string(),
         code_hash: config.anml_token_hash.clone(),
         msg: to_binary(&burn_msg)?,
         funds: vec![],
     });
-
 
     Ok(Response::new()
         .add_message(burn_wasm_msg)

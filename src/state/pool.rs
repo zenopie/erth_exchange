@@ -45,3 +45,16 @@ pub static USER_INFO: Keymap<Addr, UserInfo> = Keymap::new(b"user_info");
 
 pub static PENDING_POOL: Item<Addr> = Item::new(b"pending_pool");
 
+
+// For demonstration, let's define a record we want to store:
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct UnbondRecord {
+    pub pool: Addr,
+    pub amount: Uint128,
+    pub start_time: u64,
+}
+
+// Base KeyMap. We'll build "sub-keys" for each pool by concatenating prefixes at runtime.
+pub static UNBONDING_REQUESTS: Keymap<Addr, Vec<UnbondRecord>> = Keymap::new(b"unbonding_requests");
+
+

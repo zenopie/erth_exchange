@@ -1,11 +1,12 @@
 // src/execute/mod.rs
 pub mod update_config;
 pub mod liquidity;
+pub mod rewards;
 pub mod pool;
 pub mod swap;
 
 
-pub use liquidity::{update_user_rewards};
+pub use rewards::{update_user_rewards, pool_rewards_upkeep, handle_pool_rewards_update_reply};
 pub use pool::{handle_instantiate_lp_token_reply};
 
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, StdError, Uint128,
@@ -23,13 +24,16 @@ pub fn execute_dispatch(
 ) -> StdResult<Response> {
     match msg {
         ExecuteMsg::UpdateConfig { config } => update_config::update_config(deps, env, info, config),
-        ExecuteMsg::ClaimRewards {pools} => liquidity::claim_rewards(deps, info, pools),
+        ExecuteMsg::ClaimRewards {pools} => rewards::claim_rewards(deps, info, pools),
         ExecuteMsg::AddLiquidity { amount_erth, amount_b, pool, stake } =>
             liquidity::add_liquidity(deps, env, info, amount_erth, amount_b, pool, stake),
-        ExecuteMsg::WithdrawLpTokens { pool, amount, unbond } => liquidity::withdraw_lp_tokens(deps, info, pool, amount, unbond),
+        ExecuteMsg::WithdrawLpTokens { pool, amount, unbond } => liquidity::withdraw_lp_tokens(deps, env, info, pool, amount, unbond),
+        ExecuteMsg::ClaimUnbondLiquidity { pool } => liquidity::claim_unbond_liquidity(deps, env, info, pool),
         ExecuteMsg::AddPool {token, hash, symbol} => pool::add_pool(deps, env, info, token, hash, symbol),
         ExecuteMsg::UpdatePoolConfig { pool, pool_config } => 
             pool::update_pool_config(deps, info, pool, pool_config),
+        ExecuteMsg::UpdatePoolRewards {} =>
+            rewards::update_pool_rewards(deps, info),
         ExecuteMsg::Receive { sender, from, amount, msg, memo: _ } => 
             recieve_dispatch(deps, env, info, sender, from, amount, msg),
     }
@@ -51,7 +55,7 @@ pub fn recieve_dispatch(
 
     match msg {
         ReceiveMsg::DepositLpTokens {pool} => liquidity::deposit_lp_tokens(deps, env, info, from_addr, amount, pool),
-        ReceiveMsg::UnbondLiquidity {pool} => liquidity::unbond_liquidity(deps, env, info, from_addr, amount, pool),
+        ReceiveMsg::UnbondLiquidity {pool} => liquidity::unbond_liquidity_request(deps, env, info, from_addr, amount, pool),
         ReceiveMsg::Swap {output_token, ..} => swap::swap(deps, info, from_addr, amount, output_token,),
         ReceiveMsg::AnmlBuybackSwap {} => swap::anml_buyback_swap(deps, env, info, amount),
         ReceiveMsg::AllocationSend { allocation_id } => recieve_allocation(deps, env, info, amount, allocation_id),

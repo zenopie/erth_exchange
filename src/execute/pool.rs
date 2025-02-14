@@ -56,7 +56,7 @@ pub fn add_pool(
         config: pool_config,
     };
 
-    let lp_token_name = format!("ERTH-{} Earth Exchange LP Token", symbol);
+    let lp_token_name = format!("ERTH-{} LP", symbol);
     let lp_token_symbol = format!("{}LP", symbol);
 
     let init_config = InitConfig {

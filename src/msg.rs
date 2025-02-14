@@ -33,6 +33,9 @@ pub enum ExecuteMsg {
         amount: Uint128,
         unbond: bool,
     },
+    ClaimUnbondLiquidity {
+        pool: String,
+    },
     ClaimRewards {
         pools: Vec<String>,
     },
@@ -48,6 +51,7 @@ pub enum ExecuteMsg {
         pool: String, 
         pool_config: PoolConfig,
     },
+    UpdatePoolRewards {},
     Receive {
         sender: String,
         from: String,

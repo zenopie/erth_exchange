@@ -264,7 +264,6 @@ pub fn withdraw_lp_tokens(
 
     // If unbond == false, just transfer LP tokens to user
     if !unbond {
-        // Return LP tokens directly
         let transfer_lp_msg = CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: pool_info.config.lp_token_contract.to_string(),
             code_hash: pool_info.config.lp_token_hash.clone(),
@@ -285,7 +284,11 @@ pub fn withdraw_lp_tokens(
     }
     // If unbond == true, create an unbond record
 
-    // 1) Store unbond record in UNBONDING for (pool, user)
+    // increment unbonding_shares in the pool
+    pool_info.state.unbonding_shares += amount;
+    POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
+
+    // Store unbond record in UNBONDING for pool
     let unbonding_by_pool = UNBONDING_REQUESTS.add_suffix(pool_addr.as_bytes());
     let mut unbond_records = unbonding_by_pool
         .get(deps.storage, &info.sender)
@@ -299,21 +302,6 @@ pub fn withdraw_lp_tokens(
     });
     unbonding_by_pool.insert(deps.storage, &info.sender, &unbond_records)?;
 
-    // 2) Ensure the contract actually holds the LP tokens 
-    //    by transferring them from the user to the contract for safekeeping
-    let transfer_from_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: pool_info.config.lp_token_contract.to_string(),
-        code_hash: pool_info.config.lp_token_hash.clone(),
-        msg: to_binary(&snip20::HandleMsg::TransferFrom {
-            owner: info.sender.to_string(),
-            recipient: env.contract.address.to_string(),
-            amount,
-            padding: None,
-            memo: None,
-        })?,
-        funds: vec![],
-    });
-    messages.push(transfer_from_msg);
 
     Ok(Response::new()
         .add_messages(messages)
@@ -321,6 +309,7 @@ pub fn withdraw_lp_tokens(
         .add_attribute("withdrawn_lp", amount.to_string())
         .add_attribute("claimable_at", (now + config.unbonding_seconds).to_string()))
 }
+
 
 
 // -------------------------
@@ -336,7 +325,7 @@ pub fn unbond_liquidity_request(
 ) -> Result<Response, StdError> {
 
     let pool_addr = deps.api.addr_validate(&pool)?;
-    let pool_info = POOL_INFO
+    let mut pool_info = POOL_INFO
         .get(deps.storage, &pool_addr)
         .ok_or_else(|| StdError::generic_err("Pool info not found"))?;
 
@@ -344,6 +333,10 @@ pub fn unbond_liquidity_request(
     if info.sender != pool_info.config.lp_token_contract {
         return Err(StdError::generic_err("Unauthorized caller: must be LP token contract"));
     }
+
+    // Increase unbonding_shares on the pool
+    pool_info.state.unbonding_shares += lp_amount;
+    POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
     let unbonding_by_pool = UNBONDING_REQUESTS.add_suffix(pool_addr.as_bytes());
     let mut records = unbonding_by_pool
@@ -413,6 +406,10 @@ pub fn claim_unbond_liquidity(
     let amount_erth = total_lp * pool_info.state.erth_reserve / pool_info.state.total_shares;
     let amount_b    = total_lp * pool_info.state.token_b_reserve / pool_info.state.total_shares;
 
+    // Decrement unbonding_shares by total_lp
+    pool_info.state.unbonding_shares =
+        pool_info.state.unbonding_shares.checked_sub(total_lp)?;
+    
     // Update pool reserves
     pool_info.state.erth_reserve    = pool_info.state.erth_reserve.checked_sub(amount_erth)?;
     pool_info.state.token_b_reserve = pool_info.state.token_b_reserve.checked_sub(amount_b)?;

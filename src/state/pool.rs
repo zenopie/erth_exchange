@@ -14,6 +14,7 @@ pub struct PoolState {
     pub token_b_reserve: Uint128,
     pub daily_rewards: [Uint128; 7],
     pub last_updated_day: u64,
+    pub unbonding_shares: Uint128,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]

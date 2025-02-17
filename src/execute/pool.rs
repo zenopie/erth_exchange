@@ -41,6 +41,7 @@ pub fn add_pool(
         token_b_reserve: Uint128::zero(),
         daily_rewards: [Uint128::zero(); 7],
         last_updated_day: 0,
+        unbonding_shares: Uint128::zero(),
     };
 
     let pool_config = PoolConfig {
@@ -93,6 +94,17 @@ pub fn add_pool(
     // Submessage for LP token instantiation
     let sub_msg_lp = SubMsg::reply_on_success(CosmosMsg::Wasm(lp_token_msg), INSTANTIATE_LP_TOKEN_REPLY_ID);
 
+    // Register this contract as a receiver for the token
+    let register_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+        contract_addr: pool_addr.to_string(),
+        code_hash: hash.clone(),
+        msg: to_binary(&snip20::HandleMsg::RegisterReceive {
+            code_hash: env.contract.code_hash.clone(),
+            padding: None,  // Optional padding
+        })?,
+        funds: vec![],
+    });
+
 
     // Save the new PoolInfo in POOL_INFO using the pool address as the key
     POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
@@ -100,6 +112,7 @@ pub fn add_pool(
 
     Ok(Response::new()
         .add_submessage(sub_msg_lp)
+        .add_message(register_msg)
         .add_attribute("action", "add_pool")
         .add_attribute("pool_address", pool_addr.to_string())
         .add_attribute("lp_token_hash", config.lp_token_hash))

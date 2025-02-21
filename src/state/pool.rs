@@ -13,6 +13,7 @@ pub struct PoolState {
     pub erth_reserve: Uint128,
     pub token_b_reserve: Uint128,
     pub daily_rewards: [Uint128; 7],
+    pub daily_volumes: [Uint128; 7],
     pub last_updated_day: u64,
     pub unbonding_shares: Uint128,
 }

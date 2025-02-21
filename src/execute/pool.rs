@@ -40,6 +40,7 @@ pub fn add_pool(
         erth_reserve: Uint128::zero(),
         token_b_reserve: Uint128::zero(),
         daily_rewards: [Uint128::zero(); 7],
+        daily_volumes: [Uint128::zero(); 7],
         last_updated_day: 0,
         unbonding_shares: Uint128::zero(),
     };
@@ -88,7 +89,7 @@ pub fn add_pool(
         code_hash: config.lp_token_hash.clone(),
         msg: to_binary(&lp_token_instantiate_msg)?,
         funds: vec![],
-        label: lp_token_name,
+        label: lp_token_name + "  Token Contract v.0.0.1",
     };
 
     // Submessage for LP token instantiation

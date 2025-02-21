@@ -2,6 +2,7 @@
 use cosmwasm_std::{Deps, Env, Binary, StdResult, to_binary, Uint128 };
 use crate::msg::{QueryMsg, UserInfoResponse};
 use crate::state::{STATE, State, Config, CONFIG, UserInfo, USER_INFO, POOL_INFO, PoolInfo,
+    UNBONDING_REQUESTS, UnbondRecord,
     };
 use crate::execute::{update_user_rewards};
 
@@ -12,6 +13,9 @@ pub fn query_dispatch(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary>
         QueryMsg::QueryConfig {} => to_binary(&query_config(deps)?),
         QueryMsg::QueryPoolInfo {pools} => to_binary(&query_pool_info(deps, pools)?),
         QueryMsg::QueryUserInfo {pools, user} => to_binary(&query_user_info(deps, pools, user)?),
+        QueryMsg::QueryUnbondingRequests { pool, user } => {
+            to_binary(&query_unbonding_requests(deps, pool, user)?)
+        },
     }
 }
 
@@ -93,4 +97,21 @@ fn query_user_info(
     }
 
     Ok(results)
+}
+
+
+fn query_unbonding_requests(
+    deps: Deps,
+    pool: String,
+    user: String,
+) -> StdResult<Vec<UnbondRecord>> {
+    let pool_addr = deps.api.addr_validate(&pool)?;
+    let user_addr = deps.api.addr_validate(&user)?;
+
+    let unbonding_by_pool = UNBONDING_REQUESTS.add_suffix(pool_addr.as_bytes());
+    let records = unbonding_by_pool
+        .get(deps.storage, &user_addr)
+        .unwrap_or_default();
+
+    Ok(records)
 }

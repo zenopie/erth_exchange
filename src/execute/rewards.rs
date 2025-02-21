@@ -115,16 +115,22 @@ pub fn pool_rewards_upkeep(
             if days_passed > 0 {
                 if days_passed >= 7 {
                     pool_info.state.daily_rewards = [Uint128::zero(); 7];
+                    pool_info.state.daily_volumes = [Uint128::zero(); 7];
                 } else {
                     for _ in 0..days_passed {
                         pool_info.state.daily_rewards.rotate_right(1);
                         pool_info.state.daily_rewards[0] = Uint128::zero();
+                        pool_info.state.daily_volumes.rotate_right(1);
+                        pool_info.state.daily_volumes[0] = Uint128::zero();
                     }
                 }
                 pool_info.state.last_updated_day = current_day;
             }
 
             if !pool_info.state.pending_volume.is_zero() {
+                // Update daily volumes
+                pool_info.state.daily_volumes[0] += pool_info.state.pending_volume;
+                
                 let pool_share = pool_info
                     .state
                     .pending_volume

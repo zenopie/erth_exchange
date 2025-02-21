@@ -108,6 +108,10 @@ pub enum QueryMsg {
         pools: Vec<String>, 
         user: String,
     },
+    QueryUnbondingRequests { 
+        pool: String, 
+        user: String,
+    },
 }
 
 

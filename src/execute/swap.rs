@@ -16,11 +16,10 @@ pub fn swap(
     let mut state = STATE.load(deps.storage)?;
     let config = CONFIG.load(deps.storage)?;
 
-    // Determine if a double swap is needed (input != ERTH and output != ERTH)
-    if info.sender != config.erth_token_contract && output_token != config.erth_token_contract {
-        // Double swap scenario
-
-        // Swap input_token -> ERTH
+    // 1) Check if we need a double swap (input != ERTH and output != ERTH)
+    if info.sender != config.erth_token_contract && output_token_addr != config.erth_token_contract {
+        // ============== DOUBLE SWAP ==============
+        // 1) input_token -> ERTH
         let mut input_pool_info = POOL_INFO
             .get(deps.storage, &info.sender)
             .ok_or_else(|| StdError::generic_err("No pool found for input token"))?;
@@ -28,26 +27,29 @@ pub fn swap(
         let (fee_step1, intermediate_amount, vol_step1) =
             calculate_swap(&config, &mut input_pool_info, amount, &info.sender)?;
 
-        
         input_pool_info.state.pending_volume += vol_step1;
         POOL_INFO.insert(deps.storage, &info.sender, &input_pool_info)?;
 
-        // 2) Swap ERTH -> output_token
+        // 2) ERTH -> output_token
         let mut output_pool_info = POOL_INFO
             .get(deps.storage, &output_token_addr)
             .ok_or_else(|| StdError::generic_err("No pool found for output token"))?;
 
-        let (fee_step2, final_output_amount, vol_step2) =
-            calculate_swap(&config, &mut output_pool_info, intermediate_amount, &config.erth_token_contract.clone())?;
+        let (fee_step2, final_output_amount, vol_step2) = calculate_swap(
+            &config,
+            &mut output_pool_info,
+            intermediate_amount,
+            &config.erth_token_contract
+        )?;
 
         output_pool_info.state.pending_volume += vol_step2;
         POOL_INFO.insert(deps.storage, &output_token_addr, &output_pool_info)?;
-        
+
         let total_fee = fee_step1 + fee_step2;
         state.erth_burned += total_fee;
         STATE.save(deps.storage, &state)?;
 
-        // Construct transfer message for final output
+        // Transfer final output token to user
         let transfer_msg = CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: output_pool_info.config.token_b_contract.to_string(),
             code_hash: output_pool_info.config.token_b_hash,
@@ -60,6 +62,7 @@ pub fn swap(
             funds: vec![],
         });
 
+        // Burn the total fee from ERTH
         let burn_msg = snip20::HandleMsg::Burn {
             amount: total_fee,
             memo: None,
@@ -85,63 +88,117 @@ pub fn swap(
             .add_attribute("trade_volume_step2", vol_step2.to_string()))
 
     } else {
-        // Single swap scenario (either input or output is ERTH)
-        let pool_addr = if info.sender == config.erth_token_contract {
-            output_token_addr.clone()
-        } else {
-            info.sender.clone()
-        };
-        let mut pool_info = POOL_INFO
-            .get(deps.storage, &pool_addr)
-            .ok_or_else(|| StdError::generic_err("No pool found for the given token"))?;
+        // ============== SINGLE SWAP ==============
+        // Either input=ERTH & output=token, or input=token & output=ERTH
 
-        let (protocol_fee, output_amount, trade_volume) =
-            calculate_swap(&config, &mut pool_info, amount, &info.sender)?;
+        if info.sender == config.erth_token_contract {
+            // -------- ERTH IN → TOKEN OUT --------
+            // The "pool" address is the output token’s address
+            let pool_addr = output_token_addr.clone();
+            let mut pool_info = POOL_INFO
+                .get(deps.storage, &pool_addr)
+                .ok_or_else(|| StdError::generic_err("No pool found for the given token"))?;
 
-        pool_info.state.pending_volume += trade_volume;
-        POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
+            let (protocol_fee, output_amount, trade_volume) =
+                calculate_swap(&config, &mut pool_info, amount, &config.erth_token_contract)?;
 
-        state.erth_burned += protocol_fee;
-        STATE.save(deps.storage, &state)?;
+            pool_info.state.pending_volume += trade_volume;
+            POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
-        // Transfer the output tokens to the user
-        let transfer_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-            contract_addr: pool_info.config.token_b_contract.to_string(),
-            code_hash: pool_info.config.token_b_hash,
-            msg: to_binary(&snip20::HandleMsg::Transfer {
-                recipient: from.to_string(),
-                amount: output_amount,
-                padding: None,
+            state.erth_burned += protocol_fee;
+            STATE.save(deps.storage, &state)?;
+
+            // Transfer the "token" (token_b_contract) to user
+            let transfer_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: pool_info.config.token_b_contract.to_string(),
+                code_hash: pool_info.config.token_b_hash,
+                msg: to_binary(&snip20::HandleMsg::Transfer {
+                    recipient: from.to_string(),
+                    amount: output_amount,
+                    padding: None,
+                    memo: None,
+                })?,
+                funds: vec![],
+            });
+
+            // Burn fee in ERTH
+            let burn_msg = snip20::HandleMsg::Burn {
+                amount: protocol_fee,
                 memo: None,
-            })?,
-            funds: vec![],
-        });
+                padding: None,
+            };
+            let burn_wasm_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: config.erth_token_contract.to_string(),
+                code_hash: config.erth_token_hash.clone(),
+                msg: to_binary(&burn_msg)?,
+                funds: vec![],
+            });
 
-        let burn_msg = snip20::HandleMsg::Burn {
-            amount: protocol_fee,
-            memo: None,
-            padding: None,
-        };
+            Ok(Response::new()
+                .add_message(transfer_msg)
+                .add_message(burn_wasm_msg)
+                .add_attribute("action", "swap_erth_in")
+                .add_attribute("from", from.to_string())
+                .add_attribute("input_amount", amount.to_string())
+                .add_attribute("output_amount", output_amount.to_string())
+                .add_attribute("protocol_fee_amount", protocol_fee.to_string())
+                .add_attribute("trade_volume_in_erth", trade_volume.to_string()))
+        } else {
+            // -------- TOKEN IN → ERTH OUT --------
+            // The pool address is info.sender (the token contract)
+            let pool_addr = info.sender.clone();
+            let mut pool_info = POOL_INFO
+                .get(deps.storage, &pool_addr)
+                .ok_or_else(|| StdError::generic_err("No pool found for the given token"))?;
 
-        let burn_wasm_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-            contract_addr: config.erth_token_contract.to_string(),
-            code_hash: config.erth_token_hash.clone(),
-            msg: to_binary(&burn_msg)?,
-            funds: vec![],
-        });
+            let (protocol_fee, output_amount, trade_volume) =
+                calculate_swap(&config, &mut pool_info, amount, &info.sender)?;
 
+            pool_info.state.pending_volume += trade_volume;
+            POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
-        Ok(Response::new()
-            .add_message(transfer_msg)
-            .add_message(burn_wasm_msg)
-            .add_attribute("action", "swap")
-            .add_attribute("from", from.to_string())
-            .add_attribute("input_amount", amount.to_string())
-            .add_attribute("output_amount", output_amount.to_string())
-            .add_attribute("protocol_fee_amount", protocol_fee.to_string())
-            .add_attribute("trade_volume_in_erth", trade_volume.to_string()))
+            state.erth_burned += protocol_fee;
+            STATE.save(deps.storage, &state)?;
+
+            // Transfer ERTH to user (since output = ERTH)
+            let transfer_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: config.erth_token_contract.to_string(),
+                code_hash: config.erth_token_hash.clone(),
+                msg: to_binary(&snip20::HandleMsg::Transfer {
+                    recipient: from.to_string(),
+                    amount: output_amount,
+                    padding: None,
+                    memo: None,
+                })?,
+                funds: vec![],
+            });
+
+            // Burn fee in ERTH
+            let burn_msg = snip20::HandleMsg::Burn {
+                amount: protocol_fee,
+                memo: None,
+                padding: None,
+            };
+            let burn_wasm_msg = CosmosMsg::Wasm(WasmMsg::Execute {
+                contract_addr: config.erth_token_contract.to_string(),
+                code_hash: config.erth_token_hash.clone(),
+                msg: to_binary(&burn_msg)?,
+                funds: vec![],
+            });
+
+            Ok(Response::new()
+                .add_message(transfer_msg)
+                .add_message(burn_wasm_msg)
+                .add_attribute("action", "swap_token_in")
+                .add_attribute("from", from.to_string())
+                .add_attribute("input_amount", amount.to_string())
+                .add_attribute("output_amount", output_amount.to_string())
+                .add_attribute("protocol_fee_amount", protocol_fee.to_string())
+                .add_attribute("trade_volume_in_erth", trade_volume.to_string()))
+        }
     }
 }
+
 
 
 

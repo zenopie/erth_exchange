@@ -112,6 +112,11 @@ pub enum QueryMsg {
         pool: String, 
         user: String,
     },
+    SimulateSwap {
+        input_token: String,
+        amount: Uint128,
+        output_token: String,
+    },
 }
 
 
@@ -119,6 +124,13 @@ pub enum QueryMsg {
 pub struct UserInfoResponse {
     pub pool_info: PoolInfo,
     pub user_info: UserInfo,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct SimulateSwapResponse {
+    pub output_amount: Uint128,
+    pub intermediate_amount: Uint128,   // if double swap, can return it
+    pub total_fee: Uint128,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]

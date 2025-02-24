@@ -27,7 +27,7 @@ pub fn swap(
         let (fee_step1, intermediate_amount, vol_step1) =
             calculate_swap(&config, &mut input_pool_info, amount, &info.sender)?;
 
-        input_pool_info.state.pending_volume += vol_step1;
+        input_pool_info.state.daily_volumes[0] += vol_step1;
         POOL_INFO.insert(deps.storage, &info.sender, &input_pool_info)?;
 
         // 2) ERTH -> output_token
@@ -42,7 +42,7 @@ pub fn swap(
             &config.erth_token_contract
         )?;
 
-        output_pool_info.state.pending_volume += vol_step2;
+        output_pool_info.state.daily_volumes[0] += vol_step2;
         POOL_INFO.insert(deps.storage, &output_token_addr, &output_pool_info)?;
 
         let total_fee = fee_step1 + fee_step2;
@@ -102,7 +102,7 @@ pub fn swap(
             let (protocol_fee, output_amount, trade_volume) =
                 calculate_swap(&config, &mut pool_info, amount, &config.erth_token_contract)?;
 
-            pool_info.state.pending_volume += trade_volume;
+            pool_info.state.daily_volumes[0] += trade_volume;
             POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
             state.erth_burned += protocol_fee;
@@ -154,7 +154,7 @@ pub fn swap(
             let (protocol_fee, output_amount, trade_volume) =
                 calculate_swap(&config, &mut pool_info, amount, &info.sender)?;
 
-            pool_info.state.pending_volume += trade_volume;
+            pool_info.state.daily_volumes[0] += trade_volume;
             POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
             state.erth_burned += protocol_fee;
@@ -295,14 +295,14 @@ pub fn anml_buyback_swap(
     // Update pool reserves
     anml_pool_info.state.erth_reserve += amount;
     anml_pool_info.state.token_b_reserve -= output_amount;
-    anml_pool_info.state.pending_volume += amount;
+    anml_pool_info.state.daily_volumes[0] += amount;
     POOL_INFO.insert(deps.storage, &config.anml_token_contract, &anml_pool_info)?;
 
     // Track total ANML burned
     state.anml_burned += output_amount;
 
     // Distribute any pending rewards
-    pool_rewards_upkeep(deps.branch(), env.clone(), &mut state)?;
+    pool_rewards_upkeep(&mut deps, env.clone(), &mut state)?;
 
     // Save updated state
     STATE.save(deps.storage, &state)?;

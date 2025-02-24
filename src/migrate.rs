@@ -7,8 +7,6 @@ use crate::state::{CONFIG, POOL_INFO};
 use secret_toolkit::snip20;
 
 
-
-
 pub fn perform_migration(
     deps: DepsMut, 
     env: Env, 
@@ -33,6 +31,7 @@ fn migrate_state(
     for (pool_addr, info) in items {
 
 
+
         // Register this contract as a receiver for the token at pool_addr
         let register_msg = CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: pool_addr.to_string(),
@@ -48,7 +47,7 @@ fn migrate_state(
         // Register receive for LP token
         let lp_register = CosmosMsg::Wasm(WasmMsg::Execute {
             contract_addr: info.config.lp_token_contract.to_string(),
-            code_hash: info.config.lp_token_hash,
+            code_hash: info.config.lp_token_hash.clone(),
             msg: to_binary(&snip20::HandleMsg::RegisterReceive {
                 code_hash: env.contract.code_hash.clone(),
                 padding: None,

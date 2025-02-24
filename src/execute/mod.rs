@@ -8,6 +8,7 @@ pub mod swap;
 
 pub use rewards::{update_user_rewards, pool_rewards_upkeep, handle_pool_rewards_update_reply};
 pub use pool::{handle_instantiate_lp_token_reply};
+pub use swap::{calculate_swap};
 
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, StdError, Uint128,
     from_binary, Binary};

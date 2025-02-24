@@ -1,10 +1,10 @@
 // src/query/mod.rs
-use cosmwasm_std::{Deps, Env, Binary, StdResult, to_binary, Uint128 };
-use crate::msg::{QueryMsg, UserInfoResponse};
+use cosmwasm_std::{Deps, Env, Binary, StdResult, to_binary, Uint128, StdError };
+use crate::msg::{QueryMsg, UserInfoResponse, SimulateSwapResponse};
 use crate::state::{STATE, State, Config, CONFIG, UserInfo, USER_INFO, POOL_INFO, PoolInfo,
     UNBONDING_REQUESTS, UnbondRecord,
     };
-use crate::execute::{update_user_rewards};
+use crate::execute::{update_user_rewards, calculate_swap};
 
 
 pub fn query_dispatch(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
@@ -16,6 +16,11 @@ pub fn query_dispatch(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary>
         QueryMsg::QueryUnbondingRequests { pool, user } => {
             to_binary(&query_unbonding_requests(deps, pool, user)?)
         },
+        QueryMsg::SimulateSwap {
+            input_token,
+            amount,
+            output_token,
+        } => to_binary(&simulate_swap(deps, input_token, amount, output_token)?),
     }
 }
 
@@ -114,4 +119,72 @@ fn query_unbonding_requests(
         .unwrap_or_default();
 
     Ok(records)
+}
+
+
+fn simulate_swap(
+    deps: Deps,
+    input_token_str: String,
+    amount: Uint128,
+    output_token_str: String,
+) -> StdResult<SimulateSwapResponse> {
+    let config = CONFIG.load(deps.storage)?;
+    let input_token = deps.api.addr_validate(&input_token_str)?;
+    let output_token = deps.api.addr_validate(&output_token_str)?;
+
+    let mut total_fee = Uint128::zero();
+    let mut intermediate_amount = Uint128::zero();
+
+    // Instead of initializing to zero up front...
+    let final_output_amount;
+
+    if input_token != config.erth_token_contract && output_token != config.erth_token_contract {
+        // double swap
+        let mut input_pool_info = POOL_INFO
+            .get(deps.storage, &input_token)
+            .ok_or_else(|| StdError::generic_err("No pool found for input token"))?;
+        let (fee_step1, inter, _vol1) =
+            calculate_swap(&config, &mut input_pool_info, amount, &input_token)?;
+        intermediate_amount = inter;
+        total_fee += fee_step1;
+
+        let mut output_pool_info = POOL_INFO
+            .get(deps.storage, &output_token)
+            .ok_or_else(|| StdError::generic_err("No pool found for output token"))?;
+        let (fee_step2, final_out, _vol2) = calculate_swap(
+            &config,
+            &mut output_pool_info,
+            inter,
+            &config.erth_token_contract
+        )?;
+        final_output_amount = final_out; // <-- assigned here
+        total_fee += fee_step2;
+    } else {
+        // single swap
+        if input_token == config.erth_token_contract {
+            // ERTH in -> token out
+            let mut pool_info = POOL_INFO
+                .get(deps.storage, &output_token)
+                .ok_or_else(|| StdError::generic_err("No pool found for token"))?;
+            let (fee, out, _vol) =
+                calculate_swap(&config, &mut pool_info, amount, &config.erth_token_contract)?;
+            final_output_amount = out;  // <-- assigned here
+            total_fee += fee;
+        } else {
+            // token in -> ERTH out
+            let mut pool_info = POOL_INFO
+                .get(deps.storage, &input_token)
+                .ok_or_else(|| StdError::generic_err("No pool found for token"))?;
+            let (fee, out, _vol) =
+                calculate_swap(&config, &mut pool_info, amount, &input_token)?;
+            final_output_amount = out;  // <-- assigned here
+            total_fee += fee;
+        }
+    }
+
+    Ok(SimulateSwapResponse {
+        output_amount: final_output_amount,
+        intermediate_amount,
+        total_fee,
+    })
 }

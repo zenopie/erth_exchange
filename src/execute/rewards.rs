@@ -89,71 +89,63 @@ pub fn update_user_rewards(
 }
 
 pub fn pool_rewards_upkeep(
-    deps: DepsMut,
+    deps: &mut DepsMut,
     env: Env,
     state: &mut State,
 ) -> Result<(), StdError> {
     if state.pending_reward.is_zero() {
         return Ok(());
     }
-
+    let current_day = env.block.time.seconds() / 86400;
     let mut pools = Vec::new();
     let mut total_volume = Uint128::zero();
-    let current_day = env.block.time.seconds() / 86400;
 
+    // Update daily arrays and compute each pool's volume.
     let mut iter = POOL_INFO.iter(deps.storage)?;
-    while let Some(item_result) = iter.next() {
-        let (addr, pool_info) = item_result?;
-        total_volume += pool_info.state.pending_volume;
-        pools.push((addr, pool_info));
-    }
-
-    if !total_volume.is_zero() {
-        let reward_pool = state.pending_reward;
-        for (addr, mut pool_info) in pools {
-            let days_passed = current_day.saturating_sub(pool_info.state.last_updated_day);
-            if days_passed > 0 {
-                if days_passed >= 7 {
-                    pool_info.state.daily_rewards = [Uint128::zero(); 7];
-                    pool_info.state.daily_volumes = [Uint128::zero(); 7];
-                } else {
-                    for _ in 0..days_passed {
-                        pool_info.state.daily_rewards.rotate_right(1);
-                        pool_info.state.daily_rewards[0] = Uint128::zero();
-                        pool_info.state.daily_volumes.rotate_right(1);
-                        pool_info.state.daily_volumes[0] = Uint128::zero();
-                    }
+    while let Some(item) = iter.next() {
+        let (addr, mut pool_info) = item?;
+        let days_passed = current_day.saturating_sub(pool_info.state.last_updated_day);
+        if days_passed > 0 {
+            if days_passed >= 7 {
+                pool_info.state.daily_rewards = [Uint128::zero(); 7];
+                pool_info.state.daily_volumes = [Uint128::zero(); 7];
+            } else {
+                for _ in 0..days_passed {
+                    pool_info.state.daily_rewards.rotate_right(1);
+                    pool_info.state.daily_rewards[0] = Uint128::zero();
+                    pool_info.state.daily_volumes.rotate_right(1);
+                    pool_info.state.daily_volumes[0] = Uint128::zero();
                 }
-                pool_info.state.last_updated_day = current_day;
             }
-
-            if !pool_info.state.pending_volume.is_zero() {
-                // Update daily volumes
-                pool_info.state.daily_volumes[0] += pool_info.state.pending_volume;
-                
-                let pool_share = pool_info
-                    .state
-                    .pending_volume
-                    .multiply_ratio(reward_pool, total_volume);
-
-                if !pool_info.state.total_staked.is_zero() {
-                    let increment = pool_share
-                        .saturating_mul(SCALING_FACTOR)
-                        .checked_div(pool_info.state.total_staked)
-                        .unwrap_or(Uint128::zero());
-                    pool_info.state.reward_per_token_scaled += increment;
-                }
-                pool_info.state.daily_rewards[0] += pool_share;
-            }
-
-            pool_info.state.pending_volume = Uint128::zero();
-            POOL_INFO.insert(deps.storage, &addr, &pool_info)?;
+            pool_info.state.last_updated_day = current_day;
         }
-        state.pending_reward = Uint128::zero();
+        let pool_volume: Uint128 = pool_info.state.daily_volumes.iter().cloned().sum();
+        total_volume += pool_volume;
+        pools.push((addr, pool_info, pool_volume));
     }
 
+    if total_volume.is_zero() {
+        return Ok(());
+    }
+    let reward_pool = state.pending_reward;
+    for (addr, mut pool_info, pool_volume) in pools {
+        if !pool_volume.is_zero() {
+            let pool_share = pool_volume.multiply_ratio(reward_pool, total_volume);
+            if !pool_info.state.total_staked.is_zero() {
+                let increment = pool_share
+                    .saturating_mul(SCALING_FACTOR)
+                    .checked_div(pool_info.state.total_staked)
+                    .unwrap_or(Uint128::zero());
+                pool_info.state.reward_per_token_scaled += increment;
+            }
+            pool_info.state.daily_rewards[0] += pool_share;
+        }
+        POOL_INFO.insert(deps.storage, &addr, &pool_info)?;
+    }
+    state.pending_reward = Uint128::zero();
     Ok(())
 }
+
 
 
 pub fn update_pool_rewards(
@@ -184,7 +176,7 @@ pub fn update_pool_rewards(
 
 pub fn handle_pool_rewards_update_reply(mut deps: DepsMut, env: Env) -> StdResult<Response> {
     let mut state = STATE.load(deps.storage)?;
-    pool_rewards_upkeep(deps.branch(), env, &mut state)?;
+    pool_rewards_upkeep(&mut deps, env, &mut state)?;
     STATE.save(deps.storage, &state)?;
     Ok(Response::new().add_attribute("action", "manual_update_pool_rewards_complete"))
 }

@@ -45,13 +45,6 @@ pub fn add_liquidity(
             (shares, adjusted_amount_erth, adjusted_amount_b)
         };
 
-    // Figure out any excess token to refund
-    let (excess_token, excess_amount) = if amount_erth > adjusted_amount_erth {
-        (config.erth_token_contract.clone(), amount_erth - adjusted_amount_erth)
-    } else {
-        (pool_info.config.token_b_contract.clone(), amount_b - adjusted_amount_b)
-    };
-
     // Messages: transfer in the adjusted amounts
     let mut messages = vec![
         CosmosMsg::Wasm(WasmMsg::Execute {
@@ -79,27 +72,6 @@ pub fn add_liquidity(
             funds: vec![],
         }),
     ];
-
-    // If there's any excess, refund it
-    if excess_amount > Uint128::from(2u32) {
-        let refund_msg = snip20::HandleMsg::Transfer {
-            recipient: info.sender.to_string(),
-            amount: excess_amount,
-            padding: None,
-            memo: None,
-        };
-        let refund_hash = if excess_token == config.erth_token_contract {
-            config.erth_token_hash.clone()
-        } else {
-            pool_info.config.token_b_hash.clone()
-        };
-        messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
-            contract_addr: excess_token.to_string(),
-            code_hash: refund_hash,
-            msg: to_binary(&refund_msg)?,
-            funds: vec![],
-        }));
-    }
 
     // Update pool reserves
     pool_info.state.erth_reserve += adjusted_amount_erth;

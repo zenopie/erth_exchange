@@ -12,6 +12,20 @@ use crate::{
 };
 
 
+// Simple integer square root for u128
+fn sqrt_u128(n: u128) -> u128 {
+    if n == 0 {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = 1;
+    while x > y {
+        x = (x + y) / 2;
+        y = n / x;
+    }
+    x
+}
+
 // -------------------------
 // Add Liquidity
 // -------------------------
@@ -35,7 +49,11 @@ pub fn add_liquidity(
     // Determine LP shares
     let (shares, adjusted_amount_erth, adjusted_amount_b) =
         if pool_info.state.total_shares.is_zero() {
-            (amount_erth + amount_b, amount_erth, amount_b)
+            // Use square root of product for initial shares
+            let product = amount_erth
+                .checked_mul(amount_b)?;
+            let shares = Uint128::from(sqrt_u128(product.u128()));
+            (shares, amount_erth, amount_b)
         } else {
             let share_erth = amount_erth * pool_info.state.total_shares / pool_info.state.erth_reserve;
             let share_b = amount_b * pool_info.state.total_shares / pool_info.state.token_b_reserve;

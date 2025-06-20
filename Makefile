@@ -19,7 +19,7 @@ unit-test:
 .PHONY: build _build
 build: _build compress-wasm
 _build:
-	RUSTFLAGS='-C link-arg=-s' cargo build --release --target wasm32-unknown-unknown
+	RUSTFLAGS='-C link-arg=-s -C target-feature=-simd128,-bulk-memory,-nontrapping-fptoint' cargo build --release --target wasm32-unknown-unknown
 
 # This is a build suitable for uploading to mainnet.
 # Calls to `debug_print` get removed by the compiler.
@@ -28,13 +28,13 @@ build-mainnet: _build-mainnet compress-wasm
 _build-mainnet:
 	RUSTFLAGS='-C link-arg=-s' cargo build --release --target wasm32-unknown-unknown
 
-# like build-mainnet, but slower and more deterministic
+# use the optimized contract build enviroment
 .PHONY: build-mainnet-reproducible
 build-mainnet-reproducible:
 	docker run --rm -v "$$(pwd)":/contract \
 		--mount type=volume,source="$$(basename "$$(pwd)")_cache",target=/contract/target \
 		--mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-		ghcr.io/scrtlabs/localsecret:v1.6.0-rc.3
+		ghcr.io/scrtlabs/secret-contract-optimizer:1.0.13
 
 .PHONY: compress-wasm
 compress-wasm:

@@ -96,14 +96,51 @@ pub fn pool_rewards_upkeep(
     if state.pending_reward.is_zero() {
         return Ok(());
     }
+
     let current_day = env.block.time.seconds() / 86400;
-    let mut pools = Vec::new();
+    let mut pools_data = Vec::new();
     let mut total_volume = Uint128::zero();
 
-    // Update daily arrays and compute each pool's volume.
+    // STEP 1: READ-ONLY PASS
+    // Iterate through all pools to calculate the total volume based on their current, unmodified state.
     let mut iter = POOL_INFO.iter(deps.storage)?;
     while let Some(item) = iter.next() {
-        let (addr, mut pool_info) = item?;
+        let (addr, pool_info) = item?;
+        let pool_volume: Uint128 = pool_info.state.daily_volumes.iter().cloned().sum();
+        total_volume += pool_volume;
+        pools_data.push((addr, pool_info, pool_volume));
+    }
+
+    // If total volume from storage is zero, we can't distribute. Exit.
+    // This is now safe because we haven't wiped any data.
+    if total_volume.is_zero() {
+        return Ok(());
+    }
+
+    // STEP 2: DISTRIBUTE REWARDS (IN MEMORY)
+    // The rewards are calculated based on the data we just read, BEFORE any time-bumping.
+    let reward_pool = state.pending_reward;
+    for (_addr, pool_info, pool_volume) in pools_data.iter_mut() {
+        if !pool_volume.is_zero() {
+            let pool_share = pool_volume.multiply_ratio(reward_pool, total_volume);
+            if !pool_info.state.total_staked.is_zero() {
+                // Your original math for calculating the increment
+                let increment = pool_share
+                    .saturating_mul(SCALING_FACTOR)
+                    .checked_div(pool_info.state.total_staked)
+                    .unwrap_or(Uint128::zero());
+                pool_info.state.reward_per_token_scaled += increment;
+            }
+        }
+    }
+    // Mark the global pending reward as distributed
+    state.pending_reward = Uint128::zero();
+
+
+    // STEP 3: BUMP DAYS AND SAVE
+    // Now, iterate through the pools again to apply time-based updates and save the final state.
+    for (addr, mut pool_info, pool_volume) in pools_data {
+        // --- YOUR ORIGINAL TIME-BUMPING LOGIC, UNCHANGED ---
         let days_passed = current_day.saturating_sub(pool_info.state.last_updated_day);
         if days_passed > 0 {
             if days_passed >= 7 {
@@ -119,30 +156,18 @@ pub fn pool_rewards_upkeep(
             }
             pool_info.state.last_updated_day = current_day;
         }
-        let pool_volume: Uint128 = pool_info.state.daily_volumes.iter().cloned().sum();
-        total_volume += pool_volume;
-        pools.push((addr, pool_info, pool_volume));
-    }
+        // --- END OF YOUR ORIGINAL LOGIC ---
 
-    if total_volume.is_zero() {
-        return Ok(());
-    }
-    let reward_pool = state.pending_reward;
-    for (addr, mut pool_info, pool_volume) in pools {
+        // Add the newly distributed share to the now-updated daily_rewards array
         if !pool_volume.is_zero() {
             let pool_share = pool_volume.multiply_ratio(reward_pool, total_volume);
-            if !pool_info.state.total_staked.is_zero() {
-                let increment = pool_share
-                    .saturating_mul(SCALING_FACTOR)
-                    .checked_div(pool_info.state.total_staked)
-                    .unwrap_or(Uint128::zero());
-                pool_info.state.reward_per_token_scaled += increment;
-            }
             pool_info.state.daily_rewards[0] += pool_share;
         }
+
+        // Save the fully updated pool information to storage
         POOL_INFO.insert(deps.storage, &addr, &pool_info)?;
     }
-    state.pending_reward = Uint128::zero();
+
     Ok(())
 }
 

@@ -14,9 +14,8 @@ pub struct InstantiateMsg {
     pub anml_token_hash: String,
     pub allocation_contract: String,
     pub allocation_hash: String,
-    pub lp_token_code_id: u64,
-    pub lp_token_hash: String,
     pub unbonding_seconds: u64,
+    pub unbonding_window: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -26,12 +25,10 @@ pub enum ExecuteMsg {
         amount_erth: Uint128,
         amount_b: Uint128,
         pool: String,
-        stake: bool,
     },
-    WithdrawLpTokens {
+    RemoveLiquidity {
         pool: String,
         amount: Uint128,
-        unbond: bool,
     },
     ClaimUnbondLiquidity {
         pool: String,
@@ -64,14 +61,8 @@ pub enum ExecuteMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiveMsg {
-    DepositLpTokens {
-        pool: String,
-    },
     AllocationSend {
         allocation_id: u32,
-    },
-    UnbondLiquidity {
-        pool: String,
     },
     Swap {
         output_token: String,
@@ -79,6 +70,8 @@ pub enum ReceiveMsg {
         forwarding: Option<Addr>,
     },
     AnmlBuybackSwap {},
+    SwapToErthAndBurn {},
+    SwapForGas {},
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -131,6 +124,7 @@ pub struct SimulateSwapResponse {
     pub output_amount: Uint128,
     pub intermediate_amount: Uint128,   // if double swap, can return it
     pub total_fee: Uint128,
+    pub price_impact: Uint128,          // Price impact in basis points (e.g., 250 = 2.5%)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]

@@ -23,12 +23,11 @@ pub fn perform_instantiate(
         erth_token_contract,
         erth_token_hash: msg.erth_token_hash.clone(),
         anml_token_contract,
-        anml_token_hash: msg.erth_token_hash.clone(),
+        anml_token_hash: msg.anml_token_hash.clone(),
         allocation_contract: allocation_contract_addr,
         allocation_hash: msg.allocation_hash.clone(),
-        lp_token_code_id: msg.lp_token_code_id,
-        lp_token_hash: msg.lp_token_hash,
         unbonding_seconds: msg.unbonding_seconds,
+        unbonding_window: msg.unbonding_window,
         protocol_fee: Uint128::from(50u32),
     };
 

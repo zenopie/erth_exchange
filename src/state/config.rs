@@ -13,10 +13,11 @@ pub struct Config {
     pub anml_token_hash: String,
     pub allocation_contract: Addr,
     pub allocation_hash: String,
-    pub lp_token_code_id: u64,
-    pub lp_token_hash: String,
     pub unbonding_seconds: u64,
+    pub unbonding_window: u64,
     pub protocol_fee: Uint128,
 }
 
 pub static CONFIG: Item<Config> = Item::new(b"config");
+pub static SSCRT_TOKEN_CONTRACT: Item<Addr> = Item::new(b"sscrt_contract");
+pub static SSCRT_TOKEN_HASH: Item<String> = Item::new(b"sscrt_hash");

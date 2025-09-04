@@ -4,7 +4,7 @@ use crate::msg::{QueryMsg, UserInfoResponse, SimulateSwapResponse};
 use crate::state::{STATE, State, Config, CONFIG, UserInfo, USER_INFO, POOL_INFO, PoolInfo,
     UNBONDING_REQUESTS, UnbondRecord,
     };
-use crate::execute::{update_user_rewards, calculate_swap};
+use crate::execute::{update_user_rewards, calculate_amm_swap};
 
 
 pub fn query_dispatch(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
@@ -134,51 +134,47 @@ fn simulate_swap(
 
     let mut total_fee = Uint128::zero();
     let mut intermediate_amount = Uint128::zero();
-
-    // Instead of initializing to zero up front...
     let final_output_amount;
+    let price_impact;
 
     if input_token != config.erth_token_contract && output_token != config.erth_token_contract {
         // double swap
-        let mut input_pool_info = POOL_INFO
+        let input_pool_info = POOL_INFO
             .get(deps.storage, &input_token)
             .ok_or_else(|| StdError::generic_err("No pool found for input token"))?;
-        let (fee_step1, inter, _vol1) =
-            calculate_swap(&config, &mut input_pool_info, amount, &input_token)?;
-        intermediate_amount = inter;
-        total_fee += fee_step1;
+        let calc1 = calculate_amm_swap(&config, &input_pool_info, &input_token, amount, true)?;
+        intermediate_amount = calc1.output_amount;
+        total_fee += calc1.protocol_fee;
 
-        let mut output_pool_info = POOL_INFO
+        let output_pool_info = POOL_INFO
             .get(deps.storage, &output_token)
             .ok_or_else(|| StdError::generic_err("No pool found for output token"))?;
-        let (fee_step2, final_out, _vol2) = calculate_swap(
-            &config,
-            &mut output_pool_info,
-            inter,
-            &config.erth_token_contract
-        )?;
-        final_output_amount = final_out; // <-- assigned here
-        total_fee += fee_step2;
+        let calc2 = calculate_amm_swap(&config, &output_pool_info, &config.erth_token_contract, intermediate_amount, true)?;
+        final_output_amount = calc2.output_amount;
+        total_fee += calc2.protocol_fee;
+        
+        // Use highest price impact for double swap
+        price_impact = if calc1.price_impact > calc2.price_impact { calc1.price_impact } else { calc2.price_impact };
     } else {
         // single swap
         if input_token == config.erth_token_contract {
             // ERTH in -> token out
-            let mut pool_info = POOL_INFO
+            let pool_info = POOL_INFO
                 .get(deps.storage, &output_token)
                 .ok_or_else(|| StdError::generic_err("No pool found for token"))?;
-            let (fee, out, _vol) =
-                calculate_swap(&config, &mut pool_info, amount, &config.erth_token_contract)?;
-            final_output_amount = out;  // <-- assigned here
-            total_fee += fee;
+            let calc = calculate_amm_swap(&config, &pool_info, &config.erth_token_contract, amount, true)?;
+            final_output_amount = calc.output_amount;
+            total_fee += calc.protocol_fee;
+            price_impact = calc.price_impact;
         } else {
             // token in -> ERTH out
-            let mut pool_info = POOL_INFO
+            let pool_info = POOL_INFO
                 .get(deps.storage, &input_token)
                 .ok_or_else(|| StdError::generic_err("No pool found for token"))?;
-            let (fee, out, _vol) =
-                calculate_swap(&config, &mut pool_info, amount, &input_token)?;
-            final_output_amount = out;  // <-- assigned here
-            total_fee += fee;
+            let calc = calculate_amm_swap(&config, &pool_info, &input_token, amount, true)?;
+            final_output_amount = calc.output_amount;
+            total_fee += calc.protocol_fee;
+            price_impact = calc.price_impact;
         }
     }
 
@@ -186,5 +182,6 @@ fn simulate_swap(
         output_amount: final_output_amount,
         intermediate_amount,
         total_fee,
+        price_impact,
     })
 }

@@ -1,11 +1,9 @@
-use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError, Uint128, Addr, to_binary,
-    CosmosMsg, StdResult, SubMsgResponse, Reply, SubMsg, WasmMsg, };
+use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdError, Uint128, to_binary,
+    CosmosMsg, StdResult, WasmMsg, };
 use secret_toolkit::snip20;
 
-use crate::state::{CONFIG, PoolInfo, POOL_INFO, PENDING_POOL,
+use crate::state::{CONFIG, PoolInfo, POOL_INFO,
     PoolConfig, PoolState,};
-use crate::msg::{Snip20InstantiateMsg, InitConfig,};
-use crate::INSTANTIATE_LP_TOKEN_REPLY_ID;
 
 
 
@@ -48,8 +46,6 @@ pub fn add_pool(
         token_b_contract: pool_addr.clone(),
         token_b_hash: hash.clone(),
         token_b_symbol: symbol.clone(),
-        lp_token_contract: Addr::unchecked(""),
-        lp_token_hash: config.lp_token_hash.clone(),
     };
 
     let pool_info = PoolInfo {
@@ -57,42 +53,6 @@ pub fn add_pool(
         config: pool_config,
     };
 
-    let lp_token_name = format!("ERTH-{} LP", symbol);
-    let lp_token_symbol = format!("{}LP", symbol);
-
-    let init_config = InitConfig {
-        public_total_supply: Some(true),
-        enable_deposit: Some(false),
-        enable_redeem: Some(false),
-        enable_mint: Some(true),
-        enable_burn: Some(true),
-        can_modify_denoms: Some(false),
-    };
-
-    // Construct the SNIP-20 instantiation message
-    let lp_token_instantiate_msg = Snip20InstantiateMsg {
-        name: lp_token_name.clone(),
-        admin: Some(env.contract.address.to_string()), // Use the validated address
-        symbol: lp_token_symbol,
-        decimals: 6,
-        initial_balances: None,
-        prng_seed: to_binary(&env.block.time.seconds())?,
-        config: Some(init_config),
-        supported_denoms: None,
-    };
-
-    // Instantiate the LP token contract
-    let lp_token_msg = WasmMsg::Instantiate {
-        admin: Some(config.contract_manager.to_string()), 
-        code_id: config.lp_token_code_id,
-        code_hash: config.lp_token_hash.clone(),
-        msg: to_binary(&lp_token_instantiate_msg)?,
-        funds: vec![],
-        label: lp_token_name + "  Token Contract v.0.0.1",
-    };
-
-    // Submessage for LP token instantiation
-    let sub_msg_lp = SubMsg::reply_on_success(CosmosMsg::Wasm(lp_token_msg), INSTANTIATE_LP_TOKEN_REPLY_ID);
 
     // Register this contract as a receiver for the token
     let register_msg = CosmosMsg::Wasm(WasmMsg::Execute {
@@ -108,14 +68,11 @@ pub fn add_pool(
 
     // Save the new PoolInfo in POOL_INFO using the pool address as the key
     POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
-    PENDING_POOL.save(deps.storage, &pool_addr)?;
 
     Ok(Response::new()
-        .add_submessage(sub_msg_lp)
         .add_message(register_msg)
         .add_attribute("action", "add_pool")
-        .add_attribute("pool_address", pool_addr.to_string())
-        .add_attribute("lp_token_hash", config.lp_token_hash))
+        .add_attribute("pool_address", pool_addr.to_string()))
 }
 
 pub fn update_pool_config(
@@ -149,81 +106,3 @@ pub fn update_pool_config(
 }
 
 
-pub fn handle_instantiate_lp_token_reply(
-    deps: DepsMut,
-    env: Env,
-    msg: Reply,
-) -> StdResult<Response> {
-
-    //let config = CONFIG.load(deps.storage)?;
-    let pending_pool = PENDING_POOL.load(deps.storage)?;
-
-    // Load the existing PoolInfo
-    let mut pool_info = POOL_INFO
-        .get(deps.storage, &pending_pool)
-        .ok_or_else(|| StdError::generic_err("Pool not found"))?;
-
-    // Extract the SubMsgExecutionResponse from the reply
-    let res: SubMsgResponse = msg.result.unwrap();
-
-    // Find the event that contains the contract address
-    let contract_address_event = res
-        .events
-        .iter()
-        .find(|event| event.ty == "instantiate");
-
-    // Ensure we found the instantiate event
-    let contract_address_event = match contract_address_event {
-        Some(event) => event,
-        None => return Err(StdError::generic_err("Failed to find instantiate event")),
-    };
-
-    // Find the attribute that contains the contract address
-    let contract_address_attr = contract_address_event
-        .attributes
-        .iter()
-        .find(|attr| attr.key == "contract_address");
-
-    // Ensure we found the contract address attribute
-    let contract_address = match contract_address_attr {
-        Some(attr) => &attr.value,
-        None => return Err(StdError::generic_err("Failed to find contract address")),
-    };
-
-    // Validate the contract address
-    let lp_token_contract_addr = deps.api.addr_validate(contract_address)?;
-
-    pool_info.config.lp_token_contract = lp_token_contract_addr.clone();
-    // Save the updated PoolInfo back to storage
-    POOL_INFO.insert(deps.storage, &pending_pool, &pool_info)?;
-
-
-    // Register this contract as a receiver for the LP token
-    let register_lp_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: lp_token_contract_addr.to_string(),
-        code_hash: pool_info.config.lp_token_hash.clone(),
-        msg: to_binary(&snip20::HandleMsg::RegisterReceive {
-            code_hash: env.contract.code_hash.clone(),
-            padding: None,  // Optional padding
-        })?,
-        funds: vec![],
-    });
-
-    // Register the contract as a receiver for the B token
-    let register_b_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: pending_pool.to_string(),
-        code_hash: pool_info.config.token_b_hash.clone(),
-        msg: to_binary(&snip20::HandleMsg::RegisterReceive {
-            code_hash: env.contract.code_hash.clone(),
-            padding: None,
-        })?,
-        funds: vec![],
-    });
-
-
-    Ok(Response::new()
-        .add_message(register_lp_msg)
-        .add_message(register_b_msg)
-        .add_attribute("action", "instantiate_lp_token")
-        .add_attribute("lp_token_contract", lp_token_contract_addr.to_string()))
-}

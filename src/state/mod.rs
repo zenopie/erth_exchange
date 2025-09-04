@@ -3,7 +3,7 @@
 pub mod config;
 pub mod pool;
 
-pub use config::{Config, CONFIG,};
+pub use config::{Config, CONFIG, SSCRT_TOKEN_CONTRACT, SSCRT_TOKEN_HASH};
 pub use pool::{PoolInfo, POOL_INFO, UserInfo, USER_INFO, PoolConfig, PENDING_POOL, PoolState,
     UNBONDING_REQUESTS, UnbondRecord,
 };

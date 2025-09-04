@@ -22,8 +22,6 @@ pub struct PoolConfig {
     pub token_b_contract: Addr,
     pub token_b_hash: String,
     pub token_b_symbol: String,
-    pub lp_token_contract: Addr,
-    pub lp_token_hash: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]

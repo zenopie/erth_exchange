@@ -32,7 +32,6 @@ pub fn add_pool(
     // Initialize a new PoolInfo
     let pool_state = PoolState {
         total_shares: Uint128::zero(),
-        total_staked: Uint128::zero(),
         reward_per_token_scaled: Uint128::zero(),
         erth_reserve: Uint128::zero(),
         token_b_reserve: Uint128::zero(),

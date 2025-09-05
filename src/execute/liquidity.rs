@@ -106,7 +106,6 @@ pub fn add_liquidity(
         update_user_rewards(&pool_info, &mut user_info)?;
     }
     user_info.amount_staked += shares;
-    pool_info.state.total_staked += shares;
     user_info.reward_debt =
         user_info.amount_staked * pool_info.state.reward_per_token_scaled / SCALING_FACTOR;
     user_info_by_pool.insert(deps.storage, &info.sender, &user_info)?;
@@ -155,7 +154,6 @@ pub fn remove_liquidity(
 
     // 3) Decrease staked
     user_info.amount_staked = user_info.amount_staked.checked_sub(amount)?;
-    pool_info.state.total_staked = pool_info.state.total_staked.checked_sub(amount)?;
 
     // 4) Transfer pending rewards if any
     let mut messages: Vec<CosmosMsg> = Vec::new();
@@ -275,7 +273,7 @@ pub fn claim_unbond_liquidity(
         }
         
         user_info.amount_staked += auto_restake_shares;
-        pool_info.state.total_staked += auto_restake_shares;
+        pool_info.state.total_shares += auto_restake_shares;
         user_info.reward_debt =
             user_info.amount_staked * pool_info.state.reward_per_token_scaled / SCALING_FACTOR;
         user_info_by_pool.insert(deps.storage, &user, &user_info)?;

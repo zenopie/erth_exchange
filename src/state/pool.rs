@@ -7,7 +7,6 @@ use secret_toolkit_storage::{Item, Keymap};
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct PoolState {
     pub total_shares: Uint128,
-    pub total_staked: Uint128,
     pub reward_per_token_scaled: Uint128,
     pub erth_reserve: Uint128,
     pub token_b_reserve: Uint128,

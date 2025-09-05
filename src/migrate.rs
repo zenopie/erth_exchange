@@ -4,48 +4,12 @@ use cosmwasm_std::{DepsMut, Env, Response, StdResult, to_binary, CosmosMsg, Wasm
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use secret_toolkit_storage::{Item, Keymap};
+use secret_toolkit_storage::Keymap;
 
 use crate::msg::MigrateMsg;
-use crate::state::{CONFIG, POOL_INFO, PoolState, PoolInfo};
+use crate::state::{CONFIG, POOL_INFO};
 
 use secret_toolkit::snip20;
-
-// Old struct definitions for migration
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct OldConfig {
-    pub contract_manager: Addr,
-    pub erth_token_contract: Addr,
-    pub erth_token_hash: String,
-    pub anml_token_contract: Addr,
-    pub anml_token_hash: String,
-    pub allocation_contract: Addr,
-    pub allocation_hash: String,
-    pub lp_token_code_id: u64,
-    pub lp_token_hash: String,
-    pub unbonding_seconds: u64,
-    pub protocol_fee: Uint128,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct OldPoolConfig {
-    pub token_b_contract: Addr,
-    pub token_b_hash: String,
-    pub token_b_symbol: String,
-    pub lp_token_contract: Addr,
-    pub lp_token_hash: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct OldPoolInfo {
-    pub state: PoolState,
-    pub config: OldPoolConfig,
-}
-
-static OLD_CONFIG: Item<OldConfig> = Item::new(b"config");
-static OLD_POOL_INFO: Keymap<Addr, OldPoolInfo> = Keymap::new(b"pool_info");
-
-
 
 pub fn perform_migration(
     deps: DepsMut, 
@@ -53,55 +17,61 @@ pub fn perform_migration(
     msg: MigrateMsg,
 ) -> StdResult<Response> {
     match msg {
-        MigrateMsg::Migrate {} => migrate_state(deps, env),
+        MigrateMsg::RemoveTotalStaked {} => remove_total_staked_migration(deps, env),
     }
 }
 
-fn migrate_state(
-    deps: DepsMut,
-    env: Env,
-) -> Result<Response, StdError> {
+// Old struct for migration from total_staked to direct staking
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct OldPoolStateWithStaked {
+    pub total_shares: Uint128,
+    pub total_staked: Uint128,
+    pub reward_per_token_scaled: Uint128,
+    pub erth_reserve: Uint128,
+    pub token_b_reserve: Uint128,
+    pub daily_rewards: [Uint128; 7],
+    pub daily_volumes: [Uint128; 7],
+    pub last_updated_day: u64,
+    pub unbonding_shares: Uint128,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct OldPoolInfoWithStaked {
+    pub state: OldPoolStateWithStaked,
+    pub config: crate::state::PoolConfig,
+}
+
+static OLD_POOL_INFO_WITH_STAKED: Keymap<Addr, OldPoolInfoWithStaked> = Keymap::new(b"pool_info");
+
+fn remove_total_staked_migration(deps: DepsMut, env: Env) -> Result<Response, StdError> {
+    let config = CONFIG.load(deps.storage)?;
     let mut messages: Vec<CosmosMsg> = vec![];
 
-    // Load old config and convert to new config
-    let old_config = OLD_CONFIG.load(deps.storage)?;
-    let new_config = crate::state::Config {
-        contract_manager: old_config.contract_manager,
-        erth_token_contract: old_config.erth_token_contract,
-        erth_token_hash: old_config.erth_token_hash.clone(),
-        anml_token_contract: old_config.anml_token_contract,
-        anml_token_hash: old_config.anml_token_hash,
-        allocation_contract: old_config.allocation_contract,
-        allocation_hash: old_config.allocation_hash,
-        unbonding_seconds: 604800,
-        unbonding_window: 604800, // Default to 7 days (604800 seconds)
-        protocol_fee: old_config.protocol_fee,
-    };
-    CONFIG.save(deps.storage, &new_config)?;
-
     // Iterate over all old pools and convert to new format
-    let items: Vec<_> = OLD_POOL_INFO
+    let items: Vec<_> = OLD_POOL_INFO_WITH_STAKED
         .iter(deps.storage)?
         .collect::<Result<Vec<_>, _>>()?;
     
     let pools_count = items.len();
     
     for (pool_addr, old_pool_info) in items {
-        // Convert old pool config to new pool config (removing LP token fields)
-        let new_pool_config = crate::state::PoolConfig {
-            token_b_contract: old_pool_info.config.token_b_contract,
-            token_b_hash: old_pool_info.config.token_b_hash.clone(),
-            token_b_symbol: old_pool_info.config.token_b_symbol,
+        // Convert old pool state to new pool state (removing total_staked field)
+        let new_pool_state = crate::state::PoolState {
+            total_shares: old_pool_info.state.total_shares,
+            reward_per_token_scaled: old_pool_info.state.reward_per_token_scaled,
+            erth_reserve: old_pool_info.state.erth_reserve,
+            token_b_reserve: old_pool_info.state.token_b_reserve,
+            daily_rewards: old_pool_info.state.daily_rewards,
+            daily_volumes: old_pool_info.state.daily_volumes,
+            last_updated_day: old_pool_info.state.last_updated_day,
+            unbonding_shares: old_pool_info.state.unbonding_shares,
         };
 
-        // Create new pool info with updated config
-        let mut new_pool_info = PoolInfo {
-            state: old_pool_info.state,
-            config: new_pool_config,
+        // Create new pool info with updated state
+        let new_pool_info = crate::state::PoolInfo {
+            state: new_pool_state,
+            config: old_pool_info.config,
         };
-
-        // Set total_staked to match total_shares for direct staking
-        new_pool_info.state.total_staked = new_pool_info.state.total_shares;
         
         // Save the converted pool info
         POOL_INFO.insert(deps.storage, &pool_addr, &new_pool_info)?;
@@ -121,8 +91,8 @@ fn migrate_state(
 
     // Register receive for ERTH token
     let erth_register = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: new_config.erth_token_contract.to_string(),
-        code_hash: new_config.erth_token_hash.clone(),
+        contract_addr: config.erth_token_contract.to_string(),
+        code_hash: config.erth_token_hash.clone(),
         msg: to_binary(&snip20::HandleMsg::RegisterReceive {
             code_hash: env.contract.code_hash.clone(),
             padding: None,
@@ -132,7 +102,7 @@ fn migrate_state(
     messages.push(erth_register);
 
     Ok(Response::new()
-        .add_attribute("action", "migrate")
+        .add_attribute("action", "remove_total_staked_migration")
         .add_attribute("status", "success")
         .add_attribute("pools_migrated", pools_count.to_string())
         .add_messages(messages))

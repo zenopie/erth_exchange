@@ -123,11 +123,11 @@ pub fn pool_rewards_upkeep(
     for (_addr, pool_info, pool_volume) in pools_data.iter_mut() {
         if !pool_volume.is_zero() {
             let pool_share = pool_volume.multiply_ratio(reward_pool, total_volume);
-            if !pool_info.state.total_staked.is_zero() {
+            if !pool_info.state.total_shares.is_zero() {
                 // Your original math for calculating the increment
                 let increment = pool_share
                     .saturating_mul(SCALING_FACTOR)
-                    .checked_div(pool_info.state.total_staked)
+                    .checked_div(pool_info.state.total_shares)
                     .unwrap_or(Uint128::zero());
                 pool_info.state.reward_per_token_scaled += increment;
             }

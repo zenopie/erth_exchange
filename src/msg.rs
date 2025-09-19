@@ -14,6 +14,8 @@ pub struct InstantiateMsg {
     pub anml_token_hash: String,
     pub allocation_contract: String,
     pub allocation_hash: String,
+    pub sscrt_token_contract: String,
+    pub sscrt_token_hash: String,
     pub unbonding_seconds: u64,
     pub unbonding_window: u64,
 }
@@ -85,8 +87,7 @@ pub enum SendMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MigrateMsg {
-    RemoveTotalStaked {
-    },
+    InitializeSscrt {},
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]

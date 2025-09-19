@@ -4,7 +4,7 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, Uint128, to_b
 use secret_toolkit::snip20;
 
 use crate::msg::InstantiateMsg;
-use crate::state::{Config, STATE, CONFIG, State};
+use crate::state::{Config, STATE, CONFIG, State, SSCRT_TOKEN_CONTRACT, SSCRT_TOKEN_HASH};
 
 pub fn perform_instantiate(
     deps: DepsMut,
@@ -16,6 +16,7 @@ pub fn perform_instantiate(
     let contract_manager = deps.api.addr_validate(&msg.contract_manager)?;
     let anml_token_contract = deps.api.addr_validate(&msg.anml_token_contract)?;
     let allocation_contract_addr = deps.api.addr_validate(&msg.allocation_contract)?;
+    let sscrt_token_contract = deps.api.addr_validate(&msg.sscrt_token_contract)?;
 
 
     let config = Config {
@@ -39,6 +40,8 @@ pub fn perform_instantiate(
 
     CONFIG.save(deps.storage, &config)?;
     STATE.save(deps.storage, &state)?;
+    SSCRT_TOKEN_CONTRACT.save(deps.storage, &sscrt_token_contract)?;
+    SSCRT_TOKEN_HASH.save(deps.storage, &msg.sscrt_token_hash)?;
 
     // Register this contract as a receiver for ERTH
     let register_erth_msg = CosmosMsg::Wasm(WasmMsg::Execute {

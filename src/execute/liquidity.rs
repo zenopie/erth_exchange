@@ -277,7 +277,8 @@ pub fn claim_unbond_liquidity(
         }
         
         user_info.amount_staked += auto_restake_shares;
-        pool_info.state.total_shares += auto_restake_shares;
+        // Note: total_shares is NOT incremented — these shares were never subtracted
+        // from total_shares during remove_liquidity, they only moved to unbonding_shares.
         user_info.reward_debt =
             user_info.amount_staked * pool_info.state.reward_per_token_scaled / SCALING_FACTOR;
         user_info_by_pool.insert(deps.storage, &user, &user_info)?;

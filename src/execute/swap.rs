@@ -21,6 +21,7 @@ pub fn swap(
     from: Addr,
     amount: Uint128,
     output_token: String,
+    min_received: Option<Uint128>,
 ) -> Result<Response, StdError> {
     let output_token_addr = deps.api.addr_validate(&output_token)?;
     let input_token = info.sender.clone();
@@ -35,6 +36,16 @@ pub fn swap(
         &from,
         None, // Use default receiver (from)
     )?;
+
+    // Enforce slippage protection
+    if let Some(min) = min_received {
+        if swap_result.output_amount < min {
+            return Err(StdError::generic_err(format!(
+                "Slippage exceeded: received {} but minimum is {}",
+                swap_result.output_amount, min
+            )));
+        }
+    }
 
     // Build response with messages and attributes
     let mut response = Response::new()

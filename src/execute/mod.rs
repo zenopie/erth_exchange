@@ -54,7 +54,7 @@ pub fn recieve_dispatch(
     let from_addr = deps.api.addr_validate(&from)?;
 
     match msg {
-        ReceiveMsg::Swap {output_token, ..} => swap::swap(deps, info, from_addr, amount, output_token,),
+        ReceiveMsg::Swap {output_token, min_received, ..} => swap::swap(deps, info, from_addr, amount, output_token, min_received),
         ReceiveMsg::AnmlBuybackSwap {} => swap::anml_buyback_swap(deps, env, info, amount),
         ReceiveMsg::SwapToErthAndBurn {} => swap::swap_to_erth_and_burn(deps, env, info, amount),
         ReceiveMsg::SwapForGas {} => swap::swap_for_gas(deps, env, info, from_addr, amount),

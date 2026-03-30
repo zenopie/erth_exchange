@@ -42,17 +42,21 @@ pub fn claim_rewards(
 
     STATE.save(deps.storage, &state)?;
 
-    let transfer_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: addrs.erth_token.address.to_string(),
-        code_hash: addrs.erth_token.code_hash.clone(),
-        msg: to_binary(&snip20::HandleMsg::Transfer {
-            recipient: info.sender.to_string(),
-            amount: total_rewards,
-            padding: None,
-            memo: None,
-        })?,
-        funds: vec![],
-    });
+    let mut messages: Vec<CosmosMsg> = Vec::new();
+
+    if !total_rewards.is_zero() {
+        messages.push(CosmosMsg::Wasm(WasmMsg::Execute {
+            contract_addr: addrs.erth_token.address.to_string(),
+            code_hash: addrs.erth_token.code_hash.clone(),
+            msg: to_binary(&snip20::HandleMsg::Transfer {
+                recipient: info.sender.to_string(),
+                amount: total_rewards,
+                padding: None,
+                memo: None,
+            })?,
+            funds: vec![],
+        }));
+    }
 
     let allocation_claim_msg = CosmosMsg::Wasm(WasmMsg::Execute {
         contract_addr: addrs.staking.address.to_string(),
@@ -66,7 +70,7 @@ pub fn claim_rewards(
     Ok(Response::new()
         .add_attribute("action", "claim_rewards_and_allocation_multi")
         .add_attribute("total_claimed", total_rewards.to_string())
-        .add_message(transfer_msg)
+        .add_messages(messages)
         .add_message(allocation_claim_msg))
 }
 

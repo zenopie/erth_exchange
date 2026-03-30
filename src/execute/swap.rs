@@ -175,6 +175,9 @@ pub fn calculate_amm_swap(
             input_amount, // Trade volume is input amount in ERTH
         )
     } else if input_token == &pool_info.config.token_b_contract {
+        if pool_info.state.token_b_reserve.is_zero() {
+            return Err(StdError::generic_err("Pool has zero token_b reserve"));
+        }
         (
             pool_info.state.token_b_reserve,
             pool_info.state.erth_reserve,

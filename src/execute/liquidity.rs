@@ -295,6 +295,9 @@ pub fn claim_unbond_liquidity(
     unbonding_by_pool.insert(deps.storage, &user, &still_pending)?;
 
     // Calculate underlying tokens
+    if pool_info.state.total_shares.is_zero() {
+        return Err(StdError::generic_err("Pool has zero total shares"));
+    }
     let amount_erth = total_shares * pool_info.state.erth_reserve / pool_info.state.total_shares;
     let amount_b    = total_shares * pool_info.state.token_b_reserve / pool_info.state.total_shares;
 

@@ -8,6 +8,7 @@ use crate::{
     execute::{update_user_rewards, SCALING_FACTOR},
     state::{
         CONFIG, STATE, POOL_INFO, USER_INFO, UnbondRecord, UNBONDING_REQUESTS,
+        load_contracts,
     },
 };
 
@@ -38,6 +39,7 @@ pub fn add_liquidity(
     pool: String,
 ) -> Result<Response, StdError> {
     let config = CONFIG.load(deps.storage)?;
+    let addrs = load_contracts(&deps.as_ref(), &config)?;
     let pool_addr = deps.api.addr_validate(&pool)?;
 
     // Load or error
@@ -65,8 +67,8 @@ pub fn add_liquidity(
     // Messages: transfer in the adjusted amounts
     let messages = vec![
         CosmosMsg::Wasm(WasmMsg::Execute {
-            contract_addr: config.erth_token_contract.to_string(),
-            code_hash: config.erth_token_hash.clone(),
+            contract_addr: addrs.erth_token.address.to_string(),
+            code_hash: addrs.erth_token.code_hash.clone(),
             msg: to_binary(&snip20::HandleMsg::TransferFrom {
                 owner: info.sender.to_string(),
                 recipient: env.contract.address.to_string(),
@@ -136,6 +138,7 @@ pub fn remove_liquidity(
     let pool_addr = deps.api.addr_validate(&pool)?;
     let state = STATE.load(deps.storage)?;
     let config = CONFIG.load(deps.storage)?;
+    let addrs = load_contracts(&deps.as_ref(), &config)?;
     let mut pool_info = POOL_INFO
         .get(deps.storage, &pool_addr)
         .ok_or_else(|| StdError::generic_err("Pool info not found"))?;
@@ -159,8 +162,8 @@ pub fn remove_liquidity(
     let mut messages: Vec<CosmosMsg> = Vec::new();
     if !user_info.pending_rewards.is_zero() {
         let transfer_rewards_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-            contract_addr: config.erth_token_contract.to_string(),
-            code_hash: config.erth_token_hash.clone(),
+            contract_addr: addrs.erth_token.address.to_string(),
+            code_hash: addrs.erth_token.code_hash.clone(),
             msg: to_binary(&snip20::HandleMsg::Transfer {
                 recipient: info.sender.to_string(),
                 amount: user_info.pending_rewards,
@@ -232,6 +235,7 @@ pub fn claim_unbond_liquidity(
         .ok_or_else(|| StdError::generic_err("Pool not found"))?;
 
     let config = CONFIG.load(deps.storage)?;
+    let addrs = load_contracts(&deps.as_ref(), &config)?;
     let now = env.block.time.seconds();
 
     let unbonding_by_pool = UNBONDING_REQUESTS.add_suffix(pool_addr.as_bytes());
@@ -304,8 +308,8 @@ pub fn claim_unbond_liquidity(
     POOL_INFO.insert(deps.storage, &pool_addr, &pool_info)?;
 
     let transfer_erth_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: config.erth_token_contract.to_string(),
-        code_hash: config.erth_token_hash.clone(),
+        contract_addr: addrs.erth_token.address.to_string(),
+        code_hash: addrs.erth_token.code_hash.clone(),
         msg: to_binary(&snip20::HandleMsg::Transfer {
             recipient: user.to_string(),
             amount: amount_erth,

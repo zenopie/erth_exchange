@@ -3,7 +3,7 @@
 pub mod config;
 pub mod pool;
 
-pub use config::{Config, CONFIG, SSCRT_TOKEN_CONTRACT, SSCRT_TOKEN_HASH};
+pub use config::{Config, CONFIG, ContractInfo, ContractAddresses, query_registry, load_contracts};
 pub use pool::{PoolInfo, POOL_INFO, UserInfo, USER_INFO, PoolConfig, PENDING_POOL, PoolState,
     UNBONDING_REQUESTS, UnbondRecord,
 };
@@ -21,4 +21,3 @@ pub struct State {
 }
 
 pub static STATE: Item<State> = Item::new(b"state");
-

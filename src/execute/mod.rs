@@ -12,7 +12,7 @@ pub use swap::{calculate_amm_swap};
 use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, StdError, Uint128,
     from_binary, Binary};
 use crate::msg::{ExecuteMsg, ReceiveMsg};
-use crate::state::{STATE, CONFIG};
+use crate::state::{STATE, CONFIG, load_contracts};
 
 pub const SCALING_FACTOR: Uint128 = Uint128::new(1_000_000);
 
@@ -73,8 +73,9 @@ fn recieve_allocation(
     // Load the state
     let mut state = STATE.load(deps.storage)?;
     let config = CONFIG.load(deps.storage)?;
+    let addrs = load_contracts(&deps.as_ref(), &config)?;
 
-    if info.sender != config.erth_token_contract {
+    if info.sender != addrs.erth_token.address {
         return Err(StdError::generic_err("invalid token"));
     }
 

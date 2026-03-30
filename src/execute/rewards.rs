@@ -2,7 +2,7 @@ use cosmwasm_std::{DepsMut, Env, MessageInfo, Response, StdResult, StdError, Uin
     CosmosMsg, WasmMsg, SubMsg};
 use secret_toolkit::snip20;
 
-use crate::state::{CONFIG, STATE, PoolInfo, POOL_INFO, UserInfo, USER_INFO, State};
+use crate::state::{CONFIG, STATE, PoolInfo, POOL_INFO, UserInfo, USER_INFO, State, load_contracts};
 use crate::msg::{SendMsg};
 use crate::execute::SCALING_FACTOR;
 use crate::POOL_REWARDS_UPDATE_REPLY_ID;
@@ -15,6 +15,7 @@ pub fn claim_rewards(
 ) -> StdResult<Response> {
     let state = STATE.load(deps.storage)?;
     let config = CONFIG.load(deps.storage)?;
+    let addrs = load_contracts(&deps.as_ref(), &config)?;
     let mut total_rewards = Uint128::zero();
 
     for pool_addr_str in pools.iter() {
@@ -42,8 +43,8 @@ pub fn claim_rewards(
     STATE.save(deps.storage, &state)?;
 
     let transfer_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: config.erth_token_contract.to_string(),
-        code_hash: config.erth_token_hash.clone(),
+        contract_addr: addrs.erth_token.address.to_string(),
+        code_hash: addrs.erth_token.code_hash.clone(),
         msg: to_binary(&snip20::HandleMsg::Transfer {
             recipient: info.sender.to_string(),
             amount: total_rewards,
@@ -54,8 +55,8 @@ pub fn claim_rewards(
     });
 
     let allocation_claim_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: config.allocation_contract.to_string(),
-        code_hash: config.allocation_hash.clone(),
+        contract_addr: addrs.staking.address.to_string(),
+        code_hash: addrs.staking.code_hash.clone(),
         msg: to_binary(&SendMsg::ClaimAllocation {
             allocation_id: 1,
         })?,
@@ -179,11 +180,12 @@ pub fn update_pool_rewards(
 ) -> StdResult<Response> {
     // Load config to get the allocation contract info
     let config = CONFIG.load(deps.storage)?;
+    let addrs = load_contracts(&deps.as_ref(), &config)?;
 
     // Submessage to claim allocation #1
     let allocation_claim_msg = CosmosMsg::Wasm(WasmMsg::Execute {
-        contract_addr: config.allocation_contract.to_string(),
-        code_hash: config.allocation_hash.clone(),
+        contract_addr: addrs.staking.address.to_string(),
+        code_hash: addrs.staking.code_hash.clone(),
         msg: to_binary(&SendMsg::ClaimAllocation {
             allocation_id: 1,
         })?,
